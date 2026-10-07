@@ -33,17 +33,19 @@ GPU execution and driver compatibility must be checked on an allocated node.
 ```bash
 module load arch/h100
 module load python/3.11.5
+module load cuda/12.8.0
 python3 --version
 python3 -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version; print("Base Python:", sys.executable)'
 
 python3 -c 'import sqlite3; print("SQLite:", sqlite3.sqlite_version)'
-python3 -m venv /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311
-source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311/bin/activate
+python3 -m venv /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-311-clean
+source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-311-clean/bin/activate
 python -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version; print("Venv Python:", sys.executable)'
 
 python -m pip install --upgrade pip
 python -m pip install --only-binary=:all: -r requirements-postedit.txt
 python -m pip check
+ninja --version
 python -c 'import sqlite3; print("SQLite:", sqlite3.sqlite_version)'
 ```
 
@@ -57,7 +59,7 @@ No model download is needed. The compute job enables offline mode. Set the
 Python executable for your prepared environment before submitting:
 
 ```bash
-export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311/bin/python"
+export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-311-clean/bin/python"
 ```
 
 The launcher loads `python/3.11.5` as well as `arch/h100`, checks that SQLite
@@ -70,10 +72,35 @@ Check that path before changing library search paths or rebuilding the venv.
 The site `python/3.12.2` environment failed this check: its resolved SQLite
 library did not export `sqlite3_deserialize`. The user verified that
 `python/3.11.5` imports SQLite successfully (version 3.51.1), so preparation now
-uses a separate `venv-postedit-py311` environment. Keep the original
+uses a separate `venv-postedit-311-clean` environment, verified with Python 3.11.
+An earlier directory named `venv-postedit-py311` still contained Python 3.9;
+directory names do not determine the interpreter version. Keep the original
 `venv-postedit` intact; do not reuse a Python 3.12 venv with Python 3.11.
 Run preparation in a fresh session without the old venv activated, and replace
 any previously exported `POSTEDIT_PYTHON` with the path above.
+
+FlashInfer invokes `ninja` to compile GPU kernels. It is included in
+`requirements-postedit.txt`, and the launcher adds the selected Python's `bin`
+directory to `PATH` and checks `ninja` before model loading. Selecting a venv
+Python alone does not expose the venv's command-line executables to workers.
+For `FileNotFoundError: ... 'ninja'`, install it using that exact interpreter:
+
+```bash
+"$POSTEDIT_PYTHON" -m pip install 'ninja>=1.11'
+export PATH="$(dirname "$POSTEDIT_PYTHON"):$PATH"
+ninja --version
+```
+
+The installed PyTorch reports CUDA 12.8. The launcher therefore loads the
+available `cuda/12.8.0` toolkit and sets `CUDA_HOME` from the resolved `nvcc`
+path. FlashInfer needs that compiler for runtime kernel compilation; PyTorch's
+CUDA runtime packages alone did not provide it. Verify the toolkit with:
+
+```bash
+module load cuda/12.8.0
+command -v nvcc
+nvcc --version
+```
 
 Override the shared directory with `POSTEDIT_MODEL=/path/to/model` or pass
 `--model /path/to/model` to the launcher. Direct Python execution defaults to

@@ -21,9 +21,24 @@ export LANG=C
 export PYTHONUTF8=1
 module load arch/h100
 module load python/3.11.5
+module load cuda/12.8.0
+if ! command -v nvcc >/dev/null 2>&1; then
+    echo "Missing nvcc after loading cuda/12.8.0." >&2
+    exit 1
+fi
+NVCC_PATH="$(readlink -f "$(command -v nvcc)")"
+export CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
+nvcc --version
 # Activate your prepared CUDA-compatible environment before sbatch, or set
 # POSTEDIT_PYTHON to its absolute Python path. No downloads happen in this job.
-POSTEDIT_PYTHON="${POSTEDIT_PYTHON:-/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311/bin/python}"
+POSTEDIT_PYTHON="${POSTEDIT_PYTHON:-/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-311-clean/bin/python}"
+# Kernel compilation invokes executables such as ninja through PATH.
+export PATH="$(dirname "$POSTEDIT_PYTHON"):$PATH"
+if ! command -v ninja >/dev/null 2>&1; then
+    echo "Missing ninja. Install requirements-postedit.txt with POSTEDIT_PYTHON before submitting." >&2
+    exit 1
+fi
+ninja --version
 if ! "$POSTEDIT_PYTHON" -c 'import sys, sqlite3; print("Python:", sys.executable, "SQLite:", sqlite3.sqlite_version)'; then
     echo "SQLite import failed before inference. Resolved extension dependencies:" >&2
     SQLITE_EXTENSION="$("$POSTEDIT_PYTHON" -c 'import glob, sysconfig; print(next(iter(glob.glob(sysconfig.get_path("stdlib") + "/lib-dynload/_sqlite3*.so")), ""))')"
