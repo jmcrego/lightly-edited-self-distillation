@@ -52,21 +52,25 @@ python -c 'import sqlite3; print("SQLite:", sqlite3.sqlite_version)'
 The Jean Zay launcher defaults to the shared model directory you located:
 
 ```text
-/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-122B-A10B-FP8/
+/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-27B-FP8/
 ```
 
-No model download is needed. The compute job enables offline mode. Set the
-Python executable for your prepared environment before submitting:
+No model download is needed. The compute job enables offline mode and activates
+`venv-postedit-311-clean` directly. No `POSTEDIT_PYTHON` export is needed for
+submission. For manual environment checks, use:
 
 ```bash
 export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-311-clean/bin/python"
 ```
 
-The launcher loads `python/3.11.5` as well as `arch/h100`, checks that SQLite
-imports before loading the model, and uses the portable `C` locale with Python
+The launcher purges inherited modules, loads `arch/h100`, `python/3.11.5`, and
+`cuda/12.8.0`, then explicitly activates the project venv. It runs the 27B-FP8
+model on one H100 with tensor parallelism set to 1.
+
+The launcher uses the portable `C` locale with Python
 UTF-8 mode. If `_sqlite3` fails with `undefined symbol: sqlite3_deserialize`,
 the runtime SQLite library lacks a symbol required by this Python build. The
-launcher prints `ldd` output for the extension to identify the resolved library.
+`ldd` output for the extension identifies the resolved library.
 Check that path before changing library search paths or rebuilding the venv.
 
 The site `python/3.12.2` environment failed this check: its resolved SQLite
@@ -81,7 +85,7 @@ any previously exported `POSTEDIT_PYTHON` with the path above.
 
 FlashInfer invokes `ninja` to compile GPU kernels. It is included in
 `requirements-postedit.txt`, and the launcher adds the selected Python's `bin`
-directory to `PATH` and checks `ninja` before model loading. Selecting a venv
+directory to `PATH` through activation. Selecting a venv
 Python alone does not expose the venv's command-line executables to workers.
 For `FileNotFoundError: ... 'ninja'`, install it using that exact interpreter:
 
@@ -102,8 +106,8 @@ command -v nvcc
 nvcc --version
 ```
 
-Override the shared directory with `POSTEDIT_MODEL=/path/to/model` or pass
-`--model /path/to/model` to the launcher. Direct Python execution defaults to
+Override the shared directory with `--model /path/to/model` in the job arguments.
+Direct Python execution defaults to
 the Hugging Face model ID, so pass `--model` explicitly when running inference
 without the Jean Zay launcher.
 
@@ -122,11 +126,8 @@ prompt without importing vLLM or loading a model:
 python3 scripts/post_edit_translations.py --dry-run
 ```
 
-Run a 100-sentence pilot on one node with four H100 80 GB GPUs. FP8 weights
-are tensor-parallel across four GPUs; only ONE Slurm task launches the engine.
-The published vLLM recipe recommends four H100s for FP8 and eight for BF16.
-Use `Qwen/Qwen3.5-27B` as a smaller BF16 alternative on this node; the BF16
-122B checkpoint requires a different, multi-node launcher on Jean Zay.
+Run a 100-sentence pilot with the 27B-FP8 model on one H100 80 GB GPU.
+One Slurm task launches the engine; no GPU-allocation overrides are needed.
 The project allocation is `eut`, so use `--account=eut@h100`.
 Select any required site-specific QoS
 at submission. Four hours is a starting wall-time budget, not a throughput
