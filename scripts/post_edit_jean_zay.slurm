@@ -30,3 +30,4 @@ MODEL="${POSTEDIT_MODEL:-/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-
 # One Slurm task owns all four GPUs; vLLM launches tensor-parallel workers.
 srun --ntasks=1 "$POSTEDIT_PYTHON" -u scripts/post_edit_translations.py \
     --model "$MODEL" --tensor-parallel-size 4 --batch-size 32 "$@"
+
