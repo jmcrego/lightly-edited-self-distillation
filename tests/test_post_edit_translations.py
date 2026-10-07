@@ -173,6 +173,7 @@ class PostEditTests(unittest.TestCase):
         with patch.dict("sys.modules", modules):
             run(self.args, pairs, "prompt")
         self.assertTrue(engine_calls[0]["language_model_only"])
+        self.assertEqual(engine_calls[0]["gdn_prefill_backend"], "triton")
         self.assertNotIn("quantization", engine_calls[0])
         self.assertEqual(list(records(self.args.output)), [row()])
         with self.assertRaisesRegex(ValueError, "exists"):

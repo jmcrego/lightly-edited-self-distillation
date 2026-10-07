@@ -286,6 +286,7 @@ def run(args, pairs, prompt):
                       max_model_len=args.max_model_len, max_num_seqs=args.batch_size,
                       gpu_memory_utilization=args.gpu_memory_utilization, seed=args.seed,
                       language_model_only=True,
+                      gdn_prefill_backend="triton",
                       enable_prefix_caching=True, generation_config="vllm")
             tokenizer = llm.get_tokenizer()
             sampling = SamplingParams(temperature=0, max_tokens=args.max_new_tokens,

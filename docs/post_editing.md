@@ -112,6 +112,13 @@ the earlier cache containing commands for the nonexistent `/usr/local/cuda`.
 The log prints the compiler path and version before inference. This kernel cache
 is separate from the translation audit checkpoint and does not affect `--resume`.
 
+The inference script now selects `gdn_prefill_backend="triton"` in vLLM to
+bypass FlashInfer's GDN prefill CUDA build, which delayed startup on Jean Zay.
+The expected startup message is `Using Triton/FLA GDN prefill kernel`.
+Triton still compiles its own kernels; this change does not eliminate all
+initialization work or guarantee that a stalled job is fixed. Because resume
+checks the script hash, use a new output filename after updating the script.
+
 Override the shared directory with `--model /path/to/model` in the job arguments.
 Direct Python execution defaults to
 the Hugging Face model ID, so pass `--model` explicitly when running inference
