@@ -86,7 +86,11 @@ Select any required site-specific QoS
 at submission. Four hours is a starting wall-time budget, not a throughput
 estimate; measure the pilot before scheduling the full corpus.
 
+Create `logs/` in the submission directory before calling `sbatch`: Slurm opens
+its log files before executing the script. This directory is ignored by Git.
+
 ```bash
+mkdir -p logs
 sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm \
   --limit 100 --output data/postedited.pilot.jsonl.gz
 ```
@@ -95,12 +99,14 @@ Review pilot edits for correctness and unnecessary rewriting. Then run the
 complete corpus into a different output:
 
 ```bash
+mkdir -p logs
 sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm
 ```
 
 Resume an interrupted full run with the same inputs, prompt, model, and options:
 
 ```bash
+mkdir -p logs
 sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm --resume
 ```
 
@@ -111,6 +117,8 @@ checks alignment throughout both files.
 
 ## Outputs and Validation
 
+- `logs/postedit-<JOB_ID>.out`: Slurm stdout, progress, and summary.
+- `logs/postedit-<JOB_ID>.err`: Slurm stderr, warnings, and errors.
 - `data/postedited.10_data.jsonl.gz`: original source and target schema, with
   target `seg` replaced by the corrected synthetic translation. No teacher
   explanations enter the SFT targets. Original extra fields are preserved.

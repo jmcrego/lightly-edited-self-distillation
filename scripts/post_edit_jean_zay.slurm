@@ -1,5 +1,6 @@
 #!/bin/bash
 # Submit from the repository root; override the account with sbatch --account if needed.
+# Create logs/ before submission: mkdir -p logs
 #SBATCH --job-name=minimal-postedit
 #SBATCH --account=eut@h100
 #SBATCH --constraint=h100
@@ -9,8 +10,8 @@
 #SBATCH --cpus-per-task=96
 #SBATCH --hint=nomultithread
 #SBATCH --time=04:00:00
-#SBATCH --output=postedit-%j.out
-#SBATCH --error=postedit-%j.err
+#SBATCH --output=logs/postedit-%j.out
+#SBATCH --error=logs/postedit-%j.err
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?Submit from the repository root}"
