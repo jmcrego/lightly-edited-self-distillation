@@ -1,0 +1,3 @@
+# Install in a separate Linux/CUDA environment on Jean Zay, not on macOS.
+# Qwen3.5 requires vLLM >= 0.17; this pin includes text-only loading support.
+vllm==0.18.1
