@@ -23,15 +23,24 @@ Sources: [Qwen model card](https://huggingface.co/Qwen/Qwen3.5-122B-A10B-FP8),
 
 ## Preparation
 
-Use a dedicated Linux/CUDA Python environment on Jean Zay. Load `arch/h100`
-and the site Python/CUDA modules compatible with your environment before creating
-it. The package pin below uses the documented vLLM structured-output API; GPU
-execution has not been validated in the local macOS workspace.
+Run these installation commands from the repository root on the Jean Zay
+frontend; no GPU allocation is needed for installation. Use a dedicated
+environment in your project storage. Do not load the site `vllm` or
+`pytorch-gpu` modules into this environment: pip installs the matching
+dependencies. The available `vllm/0.7.1` module is too old for Qwen3.5.
+GPU execution and driver compatibility must be checked on an allocated node.
 
 ```bash
-python3 -m venv .venv-postedit
-source .venv-postedit/bin/activate
-python -m pip install -r requirements-postedit.txt
+module load arch/h100
+module load python/3.12.2
+python3 --version
+
+python3 -m venv /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit
+source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit/bin/activate
+
+python -m pip install --upgrade pip
+python -m pip install --only-binary=:all: -r requirements-postedit.txt
+python -m pip check
 ```
 
 The Jean Zay launcher defaults to the shared model directory you located:
@@ -44,7 +53,7 @@ No model download is needed. The compute job enables offline mode. Set the
 Python executable for your prepared environment before submitting:
 
 ```bash
-export POSTEDIT_PYTHON="$PWD/.venv-postedit/bin/python"
+export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit/bin/python"
 ```
 
 Override the shared directory with `POSTEDIT_MODEL=/path/to/model` or pass
@@ -72,12 +81,13 @@ are tensor-parallel across four GPUs; only ONE Slurm task launches the engine.
 The published vLLM recipe recommends four H100s for FP8 and eight for BF16.
 Use `Qwen/Qwen3.5-27B` as a smaller BF16 alternative on this node; the BF16
 122B checkpoint requires a different, multi-node launcher on Jean Zay.
-Replace `PROJECT` with your allocation. Select any required site-specific QoS
+The project allocation is `eut`, so use `--account=eut@h100`.
+Select any required site-specific QoS
 at submission. Four hours is a starting wall-time budget, not a throughput
 estimate; measure the pilot before scheduling the full corpus.
 
 ```bash
-sbatch --account=PROJECT@h100 scripts/post_edit_jean_zay.slurm \
+sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm \
   --limit 100 --output data/postedited.pilot.jsonl.gz
 ```
 
@@ -85,13 +95,13 @@ Review pilot edits for correctness and unnecessary rewriting. Then run the
 complete corpus into a different output:
 
 ```bash
-sbatch --account=PROJECT@h100 scripts/post_edit_jean_zay.slurm
+sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm
 ```
 
 Resume an interrupted full run with the same inputs, prompt, model, and options:
 
 ```bash
-sbatch --account=PROJECT@h100 scripts/post_edit_jean_zay.slurm --resume
+sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm --resume
 ```
 
 Use `--no-reference` for a source/student-only ablation. The default input names

@@ -1,6 +1,7 @@
 #!/bin/bash
-# Submit from the repository root; pass your account with sbatch --account=PROJECT@h100.
+# Submit from the repository root; override the account with sbatch --account if needed.
 #SBATCH --job-name=minimal-postedit
+#SBATCH --account=eut@h100
 #SBATCH --constraint=h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
