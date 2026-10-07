@@ -32,11 +32,14 @@ GPU execution and driver compatibility must be checked on an allocated node.
 
 ```bash
 module load arch/h100
-module load python/3.12.2
+module load python/3.11.5
 python3 --version
+python3 -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version; print("Base Python:", sys.executable)'
 
-python3 -m venv /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit
-source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit/bin/activate
+python3 -c 'import sqlite3; print("SQLite:", sqlite3.sqlite_version)'
+python3 -m venv /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311
+source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311/bin/activate
+python -c 'import sys; assert sys.version_info[:2] == (3, 11), sys.version; print("Venv Python:", sys.executable)'
 
 python -m pip install --upgrade pip
 python -m pip install --only-binary=:all: -r requirements-postedit.txt
@@ -54,15 +57,23 @@ No model download is needed. The compute job enables offline mode. Set the
 Python executable for your prepared environment before submitting:
 
 ```bash
-export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit/bin/python"
+export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311/bin/python"
 ```
 
-The launcher loads `python/3.12.2` as well as `arch/h100`, checks that SQLite
+The launcher loads `python/3.11.5` as well as `arch/h100`, checks that SQLite
 imports before loading the model, and uses the portable `C` locale with Python
 UTF-8 mode. If `_sqlite3` fails with `undefined symbol: sqlite3_deserialize`,
 the runtime SQLite library lacks a symbol required by this Python build. The
 launcher prints `ldd` output for the extension to identify the resolved library.
 Check that path before changing library search paths or rebuilding the venv.
+
+The site `python/3.12.2` environment failed this check: its resolved SQLite
+library did not export `sqlite3_deserialize`. The user verified that
+`python/3.11.5` imports SQLite successfully (version 3.51.1), so preparation now
+uses a separate `venv-postedit-py311` environment. Keep the original
+`venv-postedit` intact; do not reuse a Python 3.12 venv with Python 3.11.
+Run preparation in a fresh session without the old venv activated, and replace
+any previously exported `POSTEDIT_PYTHON` with the path above.
 
 Override the shared directory with `POSTEDIT_MODEL=/path/to/model` or pass
 `--model /path/to/model` to the launcher. Direct Python execution defaults to

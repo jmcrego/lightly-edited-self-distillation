@@ -20,10 +20,10 @@ export LC_ALL=C
 export LANG=C
 export PYTHONUTF8=1
 module load arch/h100
-module load python/3.12.2
+module load python/3.11.5
 # Activate your prepared CUDA-compatible environment before sbatch, or set
 # POSTEDIT_PYTHON to its absolute Python path. No downloads happen in this job.
-POSTEDIT_PYTHON="${POSTEDIT_PYTHON:-python3}"
+POSTEDIT_PYTHON="${POSTEDIT_PYTHON:-/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-py311/bin/python}"
 if ! "$POSTEDIT_PYTHON" -c 'import sys, sqlite3; print("Python:", sys.executable, "SQLite:", sqlite3.sqlite_version)'; then
     echo "SQLite import failed before inference. Resolved extension dependencies:" >&2
     SQLITE_EXTENSION="$("$POSTEDIT_PYTHON" -c 'import glob, sysconfig; print(next(iter(glob.glob(sysconfig.get_path("stdlib") + "/lib-dynload/_sqlite3*.so")), ""))')"
