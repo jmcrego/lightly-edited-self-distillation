@@ -106,6 +106,12 @@ command -v nvcc
 nvcc --version
 ```
 
+The launcher also exports `CUDA_PATH` and `FLASHINFER_NVCC` explicitly and uses
+`logs/flashinfer-cuda128` as a separate FlashInfer workspace. This avoids reusing
+the earlier cache containing commands for the nonexistent `/usr/local/cuda`.
+The log prints the compiler path and version before inference. This kernel cache
+is separate from the translation audit checkpoint and does not affect `--resume`.
+
 Override the shared directory with `--model /path/to/model` in the job arguments.
 Direct Python execution defaults to
 the Hugging Face model ID, so pass `--model` explicitly when running inference

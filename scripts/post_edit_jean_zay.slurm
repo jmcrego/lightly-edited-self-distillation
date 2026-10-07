@@ -27,6 +27,12 @@ module load cuda/12.8.0
 source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit-311-clean/bin/activate
 NVCC_PATH="$(readlink -f "$(command -v nvcc)")"
 export CUDA_HOME="$(dirname "$(dirname "$NVCC_PATH")")"
+export CUDA_PATH="$CUDA_HOME"
+export FLASHINFER_NVCC="$NVCC_PATH"
+export FLASHINFER_WORKSPACE_BASE="$PWD/logs/flashinfer-cuda128"
+mkdir -p "$FLASHINFER_WORKSPACE_BASE"
+echo "CUDA_HOME=$CUDA_HOME; FLASHINFER_NVCC=$FLASHINFER_NVCC"
+"$FLASHINFER_NVCC" --version
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
