@@ -41,6 +41,7 @@ source /lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit/bin/activate
 python -m pip install --upgrade pip
 python -m pip install --only-binary=:all: -r requirements-postedit.txt
 python -m pip check
+python -c 'import sqlite3; print("SQLite:", sqlite3.sqlite_version)'
 ```
 
 The Jean Zay launcher defaults to the shared model directory you located:
@@ -55,6 +56,13 @@ Python executable for your prepared environment before submitting:
 ```bash
 export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-postedit/bin/python"
 ```
+
+The launcher loads `python/3.12.2` as well as `arch/h100`, checks that SQLite
+imports before loading the model, and uses the portable `C` locale with Python
+UTF-8 mode. If `_sqlite3` fails with `undefined symbol: sqlite3_deserialize`,
+the runtime SQLite library lacks a symbol required by this Python build. The
+launcher prints `ldd` output for the extension to identify the resolved library.
+Check that path before changing library search paths or rebuilding the venv.
 
 Override the shared directory with `POSTEDIT_MODEL=/path/to/model` or pass
 `--model /path/to/model` to the launcher. Direct Python execution defaults to

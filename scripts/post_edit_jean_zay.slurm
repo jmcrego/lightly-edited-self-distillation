@@ -16,10 +16,22 @@
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?Submit from the repository root}"
 
+export LC_ALL=C
+export LANG=C
+export PYTHONUTF8=1
 module load arch/h100
+module load python/3.12.2
 # Activate your prepared CUDA-compatible environment before sbatch, or set
 # POSTEDIT_PYTHON to its absolute Python path. No downloads happen in this job.
 POSTEDIT_PYTHON="${POSTEDIT_PYTHON:-python3}"
+if ! "$POSTEDIT_PYTHON" -c 'import sys, sqlite3; print("Python:", sys.executable, "SQLite:", sqlite3.sqlite_version)'; then
+    echo "SQLite import failed before inference. Resolved extension dependencies:" >&2
+    SQLITE_EXTENSION="$("$POSTEDIT_PYTHON" -c 'import glob, sysconfig; print(next(iter(glob.glob(sysconfig.get_path("stdlib") + "/lib-dynload/_sqlite3*.so")), ""))')"
+    if [[ -n "$SQLITE_EXTENSION" ]]; then
+        ldd "$SQLITE_EXTENSION" >&2
+    fi
+    exit 1
+fi
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
@@ -30,4 +42,3 @@ MODEL="${POSTEDIT_MODEL:-/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-
 # One Slurm task owns all four GPUs; vLLM launches tensor-parallel workers.
 srun --ntasks=1 "$POSTEDIT_PYTHON" -u scripts/post_edit_translations.py \
     --model "$MODEL" --tensor-parallel-size 4 --batch-size 32 "$@"
-
