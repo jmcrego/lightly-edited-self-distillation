@@ -52,7 +52,7 @@ python -c 'import sqlite3; print("SQLite:", sqlite3.sqlite_version)'
 The Jean Zay launcher defaults to the shared model directory you located:
 
 ```text
-/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-27B-FP8/
+/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-122B-A10B-FP8/
 ```
 
 No model download is needed. The compute job enables offline mode and activates
@@ -64,8 +64,9 @@ export POSTEDIT_PYTHON="/lustre/fsn1/projects/rech/eut/ujt99zo/josep/venv-posted
 ```
 
 The launcher purges inherited modules, loads `arch/h100`, `python/3.11.5`, and
-`cuda/12.8.0`, then explicitly activates the project venv. It runs the 27B-FP8
-model on one H100 with tensor parallelism set to 1.
+`cuda/12.8.0`, then explicitly activates the project venv. It runs the 122B-A10B-FP8
+model on four H100 GPUs with tensor parallelism set to 4. One Slurm task launches
+vLLM, which creates the four tensor-parallel workers on the same node.
 
 The launcher uses the portable `C` locale with Python
 UTF-8 mode. If `_sqlite3` fails with `undefined symbol: sqlite3_deserialize`,
@@ -139,7 +140,7 @@ prompt without importing vLLM or loading a model:
 python3 scripts/post_edit_translations.py --dry-run
 ```
 
-Run a 100-sentence pilot with the 27B-FP8 model on one H100 80 GB GPU.
+Run a 100-sentence pilot with the 122B-A10B-FP8 model on four H100 80 GB GPUs.
 One Slurm task launches the engine; no GPU-allocation overrides are needed.
 The project allocation is `eut`, so use `--account=eut@h100`.
 Select any required site-specific QoS

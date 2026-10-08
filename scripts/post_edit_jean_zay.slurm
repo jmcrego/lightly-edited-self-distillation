@@ -6,7 +6,7 @@
 #SBATCH --constraint=h100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=24
 #SBATCH --hint=nomultithread
 #SBATCH --time=04:00:00
@@ -40,4 +40,7 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export OMP_NUM_THREADS=8
 
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-27B-FP8
-srun python -u scripts/post_edit_translations.py --model "$MODEL" --tensor-parallel-size 1 --batch-size 32 "$@"
+#srun python -u scripts/post_edit_translations.py --model "$MODEL" --tensor-parallel-size 1 --batch-size 32 "$@"
+
+MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-122B-A10B-FP8
+srun python -u scripts/post_edit_translations.py --model "$MODEL" --tensor-parallel-size 4 --batch-size 32 --output data/postedited.122b.triton.pilot.jsonl.gz "$@"
