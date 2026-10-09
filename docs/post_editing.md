@@ -211,9 +211,15 @@ The returned translation is exported as-is, including empty strings; if no strin
 the audit includes an `extraction_error`. No base/reference fallback is substituted.
 Statistics report missing translations and non-stop responses separately.
 Quality validation and filtering belong after generation, before training.
-Input alignment, context budgets, checkpoint integrity, and engine response counts
-are still checked to prevent misalignment or silent input truncation.
-Changed script or generation settings require a new output path.
+Prompts exceeding the context budget (including reserved response tokens) are
+skipped without truncation: `corrected` is null, base/reference text is retained,
+and the audit records `finish_reason: "skipped"` and
+`extraction_error: "context budget exceeded"`. Later records continue normally.
+Input alignment, checkpoint integrity, and engine response counts remain checked.
+An existing checkpoint can migrate once to this skip policy using `--resume`,
+provided all input, prompt, and generation settings are unchanged. The previous
+manifest is retained in `.context-skip-migration.json`. Other changes require a
+new output path.
 
 Edits above `--review-edit-fraction` (default 0.30) are flagged, not clipped or
 automatically rejected. The fraction is punctuation-sensitive token changes

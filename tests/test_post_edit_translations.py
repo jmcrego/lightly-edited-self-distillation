@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from scripts.post_edit_translations import (
-    edit_fraction, export_dataset, generate_batch, load_pairs, messages,
+    check_context_skip_migration, edit_fraction, export_dataset, generate_batch, load_pairs, messages,
     read_checkpoint, records, run, targets, validate_result,
 )
 
@@ -215,9 +215,26 @@ class PostEditTests(unittest.TestCase):
 
     def test_context_not_silently_truncated(self):
         self.args.max_model_len = 1025
-        with self.assertRaisesRegex(ValueError, "context budget"):
-            generate_batch(FakeLLM([]), FakeTokenizer(), None,
-                           [(row(), row())], "prompt", self.args)
+        result = generate_batch(None, FakeTokenizer(), None,
+                                [(row(), row())], "prompt", self.args)[0]
+        self.assertIsNone(result["record"]["tgts"][0]["corrected"])
+        self.assertEqual(result["record"]["tgts"][0]["base"], "Bonjour.")
+        self.assertEqual(result["targets"][0]["extraction_error"], "context budget exceeded")
+
+    def test_long_prompt_does_not_shift_later_outputs(self):
+        pairs = [(row("x" * 5000), row("x" * 5000)), (row(), row())]
+        results = generate_batch(FakeLLM([answer("Salut.")]), FakeTokenizer(), None,
+                                 pairs, "prompt", self.args)
+        self.assertIsNone(results[0]["record"]["tgts"][0]["corrected"])
+        self.assertEqual(results[1]["record"]["tgts"][0]["corrected"], "Salut.")
+
+    def test_context_skip_migration_preserves_other_settings(self):
+        previous = {"script_sha256": "old", "max_model_len": 4096, "prompt": "same"}
+        current = dict(previous, script_sha256="new", context_overflow_policy="skip")
+        self.assertTrue(check_context_skip_migration(previous, current))
+        self.assertFalse(check_context_skip_migration(previous, dict(current, prompt="changed")))
+        self.assertFalse(check_context_skip_migration(previous, dict(current, max_model_len=8192)))
+        self.assertFalse(check_context_skip_migration(current, dict(current, script_sha256="other")))
 
     def test_partial_checkpoint_recovery_and_export(self):
         path = self.directory / "audit.jsonl"
@@ -290,6 +307,14 @@ class PostEditTests(unittest.TestCase):
         # A complete checkpoint must not need vLLM or another inference pass.
         with patch.dict("sys.modules", {"vllm": None}):
             run(self.args, pairs, "prompt")
+            manifest = Path(str(self.args.output) + ".manifest.json")
+            previous = json.loads(manifest.read_text())
+            previous.pop("context_overflow_policy")
+            previous["script_sha256"] = "old"
+            manifest.write_text(json.dumps(previous))
+            run(self.args, pairs, "prompt")
+            self.assertEqual(json.loads(manifest.read_text())["context_overflow_policy"], "skip")
+            self.assertTrue(Path(str(self.args.output) + ".context-skip-migration.json").exists())
         with self.assertRaisesRegex(ValueError, "differs"):
             run(self.args, pairs, "changed prompt")
 

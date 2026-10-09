@@ -211,6 +211,7 @@ def export_dataset(path, completed):
 
 def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
     jobs = []
+    skipped = {}
     for index, (student, reference) in enumerate(batch):
         for language, original in targets(student).items():
             if original is None:
@@ -219,26 +220,28 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
                 messages(student, reference, language, prompt), tokenize=False,
                 add_generation_prompt=True, enable_thinking=False)
             if len(tokenizer.encode(text, add_special_tokens=False)) + args.max_new_tokens > args.max_model_len:
-                raise ValueError(f"batch record {index + 1}, {language}: context budget exceeded; "
-                                 "increase --max-model-len (input is never truncated)")
+                skipped[index, language] = "context budget exceeded"
+                continue
             jobs.append((index, language, original, text))
     outputs = llm.generate([{"prompt_token_ids": tokenizer.encode(job[3], add_special_tokens=False)}
                             for job in jobs], sampling, use_tqdm=False) if jobs else []
     if len(outputs) != len(jobs):
         raise ValueError("teacher returned an unexpected number of outputs")
     entries = [{"record": deepcopy(student), "targets": []} for student, _ in batch]
-    for entry, (student, reference) in zip(entries, batch):
+    for index, (entry, (student, reference)) in enumerate(zip(entries, batch)):
         originals = targets(student)
         references = targets(reference, "human") if reference is not None else {}
         for target in entry["record"]["tgts"]:
             language = target["language"]
             target["base"] = originals[language]
-            if originals[language] is None:
+            skip_reason = ("base translation unavailable" if originals[language] is None
+                           else skipped.get((index, language)))
+            if skip_reason:
                 target["corrected"] = None
-                entry["targets"].append({"language": language, "original_translation": None,
+                entry["targets"].append({"language": language, "original_translation": originals[language],
                     "corrected_translation": None, "edits": None, "edit_fraction": None,
                     "large_edit": False, "raw_response": None, "finish_reason": "skipped",
-                    "extraction_error": "base translation unavailable"})
+                    "extraction_error": skip_reason})
             if "human" not in target and "human_reference" in target:
                 target["human"] = target["human_reference"]
             target.pop("student", None)
@@ -273,6 +276,14 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
     return entries
 
 
+def check_context_skip_migration(previous, current):
+    ignored = {"script_sha256", "context_overflow_policy"}
+    return ("context_overflow_policy" not in previous
+            and current.get("context_overflow_policy") == "skip"
+            and {k: v for k, v in previous.items() if k not in ignored}
+            == {k: v for k, v in current.items() if k not in ignored})
+
+
 def run(args, pairs, prompt):
     output = args.output.resolve()
     audit = Path(str(output) + ".audit.jsonl")
@@ -289,6 +300,7 @@ def run(args, pairs, prompt):
               "quantization": "from_model_config", "language_model_only": True,
               "enable_thinking": False}
     config["output_validation"] = False
+    config["context_overflow_policy"] = "skip"
     output.parent.mkdir(parents=True, exist_ok=True)
     if not args.resume and any(p.exists() for p in (output, audit, manifest, summary_path)):
         raise ValueError("output/checkpoint exists; use --resume or a new --output")
@@ -300,8 +312,13 @@ def run(args, pairs, prompt):
         except BlockingIOError as error:
             raise ValueError("another job is using this output checkpoint") from error
         if args.resume:
-            if json.loads(manifest.read_text(encoding="utf-8")) != config:
-                raise ValueError("resume configuration/input/prompt differs from checkpoint")
+            previous = json.loads(manifest.read_text(encoding="utf-8"))
+            if previous != config:
+                if not check_context_skip_migration(previous, config):
+                    raise ValueError("resume configuration/input/prompt differs from checkpoint")
+                history = Path(str(output) + ".context-skip-migration.json")
+                atomic_json(history, {"previous": previous, "current": config})
+                atomic_json(manifest, config)
         else:
             if manifest.exists() or output.exists() or stream.tell():
                 raise ValueError("output/checkpoint was created by another job; use --resume")
