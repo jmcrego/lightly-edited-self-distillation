@@ -215,6 +215,11 @@ If the teacher reports no edits and differs only in leading/trailing whitespace,
 the original translation is restored exactly. This counts as unchanged; internal
 whitespace, casing, and punctuation differences still require declared edits.
 
+Inconsistent teacher JSON is retried for the affected translation only, with
+validation feedback, up to `--validation-retries` times (default 2). Successful
+retries retain rejected responses and diagnostics in the audit. Final validation
+remains strict: exhausted retries stop the batch without exporting invalid data.
+
 Edits above `--review-edit-fraction` (default 0.30) are flagged, not clipped or
 automatically rejected. The fraction is punctuation-sensitive token changes
 from sequence alignment divided by the longer token count; it is an audit

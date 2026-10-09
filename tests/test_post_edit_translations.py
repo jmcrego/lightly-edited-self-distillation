@@ -148,6 +148,36 @@ class PostEditTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "disagree"):
                     validate_result(json.dumps(answer(returned)), original)
 
+    def test_validation_retry_repairs_unapplied_edit_and_keeps_audit(self):
+        student = row(target="La carte pour le patient contient les messages clés.")
+        corrected = "La carte patient contient les messages clés."
+        actual = {"before": "carte pour le patient", "after": "carte patient",
+                  "category": "terminology", "reason": "Domain term."}
+        unapplied = {"before": "messages clés", "after": "messages clefs",
+                     "category": "terminology", "reason": "Reference spelling."}
+        sequence = [answer(corrected, [actual, unapplied]), answer(corrected, [actual])]
+        calls = []
+        def generate(prompts, sampling, **kwargs):
+            calls.append(prompts)
+            return FakeLLM([sequence.pop(0)]).generate(prompts, sampling)
+        result = generate_batch(SimpleNamespace(generate=generate), FakeTokenizer(), None,
+                                [(student, row())], "prompt", self.args)[0]
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(result["record"]["tgts"][0]["corrected"], corrected)
+        self.assertEqual(result["targets"][0]["edits"], [actual])
+        self.assertEqual(len(result["targets"][0]["validation_retries"]), 1)
+
+    def test_validation_retry_limit_remains_strict(self):
+        self.args.validation_retries = 1
+        calls = []
+        def generate(prompts, sampling, **kwargs):
+            calls.append(prompts)
+            return FakeLLM([answer("Unexplained change.")]).generate(prompts, sampling)
+        with self.assertRaisesRegex(ValueError, "disagree"):
+            generate_batch(SimpleNamespace(generate=generate), FakeTokenizer(), None,
+                           [(row(), row())], "prompt", self.args)
+        self.assertEqual(len(calls), 2)
+
     def test_truncation_rejected(self):
         with self.assertRaisesRegex(ValueError, "finish normally"):
             generate_batch(FakeLLM([answer()], "length"), FakeTokenizer(), None,

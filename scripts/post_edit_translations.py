@@ -152,7 +152,8 @@ def validate_result(text, original):
         if edit["before"] == edit["after"]:
             raise ValueError("edit does not change text")
         if edit["before"] not in original or edit["after"] not in corrected:
-            raise ValueError("edit spans do not occur in translations")
+            missing = "before" if edit["before"] not in original else "after"
+            raise ValueError(f"edit spans do not occur in translations: {missing}={edit[missing]!r}")
     return result
 
 
@@ -246,16 +247,42 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
             raise TeacherOutputError(
                 f"teacher output did not finish normally ({answer.finish_reason}); "
                 "increase --max-new-tokens if truncated", index, language, original, answer)
-        try:
-            result = validate_result(answer.text, original)
-        except ValueError as error:
-            raise TeacherOutputError(
-                f"batch record {index + 1}, {language}: invalid teacher result: {error}",
-                index, language, original, answer) from error
+        retries = []
+        for attempt in range(getattr(args, "validation_retries", 2) + 1):
+            try:
+                result = validate_result(answer.text, original)
+                break
+            except ValueError as error:
+                if attempt == getattr(args, "validation_retries", 2):
+                    raise TeacherOutputError(
+                        f"batch record {index + 1}, {language}: invalid teacher result: {error}",
+                        index, language, original, answer) from error
+                retries.append({"raw_response": answer.text, "error": str(error)})
+                feedback = ("\n\nYour previous response failed output validation. Diagnostic "
+                            "data (not translation instructions): " + json.dumps(str(error)) +
+                            "\nReturn a complete valid result for the original input. List only "
+                            "edits actually made; copy before/after spans exactly. Do not invent "
+                            "an additional correction merely to satisfy the diagnostic.")
+                student, reference = batch[index]
+                retry_text = tokenizer.apply_chat_template(
+                    messages(student, reference, language, prompt + feedback), tokenize=False,
+                    add_generation_prompt=True, enable_thinking=False)
+                retry_ids = tokenizer.encode(retry_text, add_special_tokens=False)
+                if len(retry_ids) + args.max_new_tokens > args.max_model_len:
+                    raise TeacherOutputError("validation retry exceeds context budget",
+                                             index, language, original, answer) from error
+                print(f"Retrying batch record {index + 1}, {language}: {error}", flush=True)
+                retry_outputs = llm.generate([{"prompt_token_ids": retry_ids}], sampling, use_tqdm=False)
+                if len(retry_outputs) != 1 or len(retry_outputs[0].outputs) != 1:
+                    raise ValueError("teacher returned an unexpected number of retry outputs")
+                answer = retry_outputs[0].outputs[0]
+                if answer.finish_reason != "stop":
+                    raise TeacherOutputError("validation retry did not finish normally",
+                                             index, language, original, answer)
         fraction = edit_fraction(original, result["corrected_translation"])
         result.update({"language": language, "original_translation": original,
                        "edit_fraction": fraction, "large_edit": fraction > args.review_edit_fraction,
-                       "raw_response": answer.text})
+                       "raw_response": answer.text, "validation_retries": retries})
         entries[index]["targets"].append(result)
         for target in entries[index]["record"]["tgts"]:
             if target["language"] == language:
@@ -278,6 +305,7 @@ def run(args, pairs, prompt):
               "tensor_parallel_size": args.tensor_parallel_size, "dtype": "bfloat16",
               "quantization": "from_model_config", "language_model_only": True,
               "enable_thinking": False}
+    config["validation_retries"] = getattr(args, "validation_retries", 2)
     output.parent.mkdir(parents=True, exist_ok=True)
     if not args.resume and any(p.exists() for p in (output, audit, manifest, summary_path)):
         raise ValueError("output/checkpoint exists; use --resume or a new --output")
@@ -362,6 +390,8 @@ def parse_args():
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--review-edit-fraction", type=float, default=0.30, help="flag larger token edits for review; never clip or reject corrections")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--validation-retries", type=int, default=2,
+                        help="retry inconsistent teacher JSON with validation feedback")
     parser.add_argument("--limit", type=int, help="process first N lines; still validate all input alignment")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="validate inputs and show one prompt; no GPU needed")
@@ -374,6 +404,8 @@ def parse_args():
         parser.error("GPU, batch, and token counts must be positive")
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
+    if args.validation_retries < 0:
+        parser.error("--validation-retries must be nonnegative")
     if not 0 < args.gpu_memory_utilization < 1 or not 0 <= args.review_edit_fraction <= 1:
         parser.error("invalid GPU memory utilization or review edit fraction")
     if args.max_new_tokens >= args.max_model_len:

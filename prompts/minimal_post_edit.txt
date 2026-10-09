@@ -81,6 +81,12 @@ edits list. For an error requiring a substantial rewrite, prioritize correctness
 make only the changes required to repair it. Do not keep an incorrect translation 
 merely to meet a small edit budget.
 
+Before returning, check that every listed edit was actually made in the complete
+corrected translation. Copy before/after spans verbatim from the respective
+texts; never list an intended but unapplied edit. If unchanged, return no edits.
+Do not replace valid spelling variants (such as French clés/clefs) merely to
+match the human reference.
+
 Return ONLY a JSON object containing:
 
 - corrected_translation: the complete minimally corrected translation;
