@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from scripts.post_edit_translations import load_pairs
 from scripts.translate_tsv import (
-    check_token_budget_resume, gemma3_rope_compatibility, generate_batch, load_tsv, run, translation_messages,
+    check_skip_policy_migration, gemma3_rope_compatibility, generate_batch, load_tsv, run, translation_messages,
 )
 
 
@@ -20,19 +20,20 @@ class Tokenizer:
 
 
 class TranslationTests(unittest.TestCase):
-    def test_token_budget_resume_is_restricted_to_increases(self):
+    def test_skip_policy_migration_preserves_unrelated_settings(self):
         previous = {"model": "same", "input_sha256": "same", "prompt": "same",
                     "max_new_tokens": 512, "max_model_len": 2048, "script_sha256": "old"}
-        current = {**previous, "max_new_tokens": 1024, "script_sha256": "new"}
-        check_token_budget_resume(previous, current)
+        current = {**previous, "failure_policy": "skip", "script_sha256": "new"}
+        check_skip_policy_migration(previous, current)
+        check_skip_policy_migration({**previous, "max_new_tokens": 1024}, current)
         for change in ({"model": "different"}, {"input_sha256": "different"},
                        {"prompt": "different"}, {"max_new_tokens": 256},
                        {"max_model_len": 1024}):
             with self.subTest(change=change):
                 with self.assertRaises(ValueError):
-                    check_token_budget_resume(previous, {**current, **change})
+                    check_skip_policy_migration(previous, {**current, **change})
         with self.assertRaises(ValueError):
-            check_token_budget_resume(previous, {**previous, "script_sha256": "new"})
+            check_skip_policy_migration(current, {**current, "script_sha256": "another"})
 
     def test_gemma3_rope_preserves_full_scaling_and_local_frequency(self):
         nested = {"full_attention": {"factor": 8.0, "rope_type": "linear"},
@@ -109,16 +110,17 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(results[0]["record"]["tgts"][0]["human"], "Bonjour.")
         self.assertEqual(rows[0]["tgts"][0]["human"], "Bonjour.")
 
-    def test_truncation_empty_and_context_overflow_are_rejected(self):
+    def test_truncation_empty_and_context_overflow_are_skipped(self):
         rows = load_tsv(self.input, "en", "fr")[:1]
         for text, reason in (("partial", "length"), (" ", "stop")):
             llm = SimpleNamespace(generate=lambda *args, **kwargs: [SimpleNamespace(
                 outputs=[SimpleNamespace(text=text, finish_reason=reason)])])
-            with self.assertRaises(ValueError):
-                generate_batch(llm, Tokenizer(), None, rows, self.args)
+            result = generate_batch(llm, Tokenizer(), None, rows, self.args)[0]
+            self.assertIsNone(result["record"]["tgts"][0]["base"])
+            self.assertTrue(result["skip_reason"])
         self.args.max_model_len = 514
-        with self.assertRaisesRegex(ValueError, "context budget"):
-            generate_batch(None, Tokenizer(), None, rows, self.args)
+        result = generate_batch(None, Tokenizer(), None, rows, self.args)[0]
+        self.assertEqual(result["skip_reason"], "context_budget_exceeded")
 
     def test_base_output_trims_only_trailing_whitespace(self):
         rows = load_tsv(self.input, "en", "fr")[:1]
@@ -156,14 +158,17 @@ class TranslationTests(unittest.TestCase):
         self.args.resume = True
         # Complete checkpoints can re-export without importing/loading vLLM.
         run(self.args, rows)
-        self.args.max_new_tokens = 1024
-        self.args.resume_with_larger_token_budget = True
+        manifest_path = Path(str(self.args.output) + ".manifest.json")
+        previous = json.loads(manifest_path.read_text())
+        previous.pop("failure_policy")
+        previous["max_new_tokens"] = 1024
+        previous["script_sha256"] = "previous-script"
+        manifest_path.write_text(json.dumps(previous))
         run(self.args, rows)
         history = json.loads(Path(str(self.args.output) + ".resume-history.jsonl").read_text())
         self.assertEqual(history["completed_rows"], 2)
-        self.assertEqual(history["previous"]["max_new_tokens"], 512)
-        self.assertEqual(history["next"]["max_new_tokens"], 1024)
-        self.args.resume_with_larger_token_budget = False
+        self.assertEqual(history["previous"]["max_new_tokens"], 1024)
+        self.assertEqual(history["next"]["max_new_tokens"], 512)
         self.args.resume = False
         self.args.output = self.root / "self-contained.jsonl.gz"
         self.args.references_output = None
@@ -185,7 +190,7 @@ class TranslationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "empty embedded"):
             load_pairs(path)
 
-    def test_larger_budget_resume_preserves_partial_checkpoint(self):
+    def test_skipped_row_is_checkpointed_and_resumable(self):
         rows = load_tsv(self.input, "en", "fr")
         self.args.batch_size = 1
         class LLM:
@@ -202,15 +207,12 @@ class TranslationTests(unittest.TestCase):
                     text=f"Translation with budget {sampling.max_tokens}.", finish_reason=reason)])]
         fake = SimpleNamespace(LLM=LLM, SamplingParams=lambda **kwargs: SimpleNamespace(**kwargs))
         with patch.dict(sys.modules, {"vllm": fake}):
-            with self.assertRaisesRegex(ValueError, "length"):
-                run(self.args, rows)
+            run(self.args, rows)
             self.args.resume = True
-            self.args.resume_with_larger_token_budget = True
-            self.args.max_new_tokens = 1024
             run(self.args, rows)
         pairs = load_pairs(self.args.output)
         self.assertEqual(pairs[0][0]["tgts"][0]["base"], "Translation with budget 512.")
-        self.assertEqual(pairs[1][0]["tgts"][0]["base"], "Translation with budget 1024.")
+        self.assertIsNone(pairs[1][0]["tgts"][0]["base"])
 
 
 if __name__ == "__main__":

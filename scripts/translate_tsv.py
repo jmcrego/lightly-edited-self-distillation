@@ -85,46 +85,50 @@ def gemma3_rope_compatibility(config):
 
 def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
     prompts = []
+    entries = []
+    positions = []
     for offset, reference in enumerate(batch):
+        record = deepcopy(reference)
+        record["tgts"][0]["base"] = None
+        entries.append({"line": start + offset + 1, "record": record,
+                        "skip_reason": None})
         token_ids = tokenizer.apply_chat_template(
             translation_messages(reference["seg"], args.source_language, args.target_language),
             chat_template=args.prompt.read_text(encoding="utf-8"),
             tokenize=True, add_generation_prompt=True)
         if len(token_ids) + args.max_new_tokens > args.max_model_len:
-            raise ValueError(f"input row {start + offset + 1}: context budget exceeded; "
-                             "increase --max-model-len (sources are never truncated)")
+            entries[offset]["skip_reason"] = "context_budget_exceeded"
+            continue
         # Token IDs avoid re-tokenizing the rendered template and duplicating BOS.
         prompts.append({"prompt_token_ids": token_ids})
-    responses = llm.generate(prompts, sampling, use_tqdm=False)
-    if len(responses) != len(batch):
+        positions.append(offset)
+    responses = llm.generate(prompts, sampling, use_tqdm=False) if prompts else []
+    if len(responses) != len(prompts):
         raise ValueError("model returned an unexpected number of translations")
-    entries = []
-    for offset, (reference, response) in enumerate(zip(batch, responses)):
+    for offset, response in zip(positions, responses):
         line = start + offset + 1
         if len(response.outputs) != 1:
             raise ValueError(f"input row {line}: expected one translation")
         answer = response.outputs[0]
+        entries[offset].update(raw_response=answer.text, finish_reason=answer.finish_reason)
         if answer.finish_reason != "stop":
-            raise ValueError(f"input row {line}: generation ended with {answer.finish_reason!r}; "
-                             "increase --max-new-tokens if truncated")
+            entries[offset]["skip_reason"] = "generation_" + str(answer.finish_reason)
+            continue
         if not isinstance(answer.text, str) or not answer.text.strip():
-            raise ValueError(f"input row {line}: empty model translation")
-        record = deepcopy(reference)
-        record["tgts"][0]["base"] = answer.text.rstrip()
-        entries.append({"line": line, "record": record})
+            entries[offset]["skip_reason"] = "empty_translation"
+            continue
+        entries[offset]["record"]["tgts"][0]["base"] = answer.text.rstrip()
     return entries
 
 
-def check_token_budget_resume(previous, current):
-    allowed = {"max_model_len", "max_new_tokens", "script_sha256"}
+def check_skip_policy_migration(previous, current):
+    allowed = {"max_new_tokens", "script_sha256", "failure_policy"}
     if ({key: value for key, value in previous.items() if key not in allowed}
             != {key: value for key, value in current.items() if key not in allowed}):
-        raise ValueError("token-budget resume cannot change input, model, prompt, or other settings")
-    for key in ("max_model_len", "max_new_tokens"):
-        if current[key] < previous[key]:
-            raise ValueError(f"token-budget resume cannot decrease {key}")
-    if all(current[key] == previous[key] for key in ("max_model_len", "max_new_tokens")):
-        raise ValueError("token-budget resume requires increased token limits")
+        raise ValueError("resume configuration or input differs from checkpoint")
+    if ("failure_policy" in previous or current.get("failure_policy") != "skip"
+            or current["max_new_tokens"] != 512 or previous["max_new_tokens"] not in (512, 1024)):
+        raise ValueError("resume settings differ; only migration to the 512-token skip policy is supported")
 
 
 def run(args, references):
@@ -145,6 +149,7 @@ def run(args, references):
               "gpu_memory_utilization": args.gpu_memory_utilization,
               "references_output": str(reference_output) if reference_output else None, "dtype": "bfloat16"}
     config["prompt"] = args.prompt.read_text(encoding="utf-8")
+    config["failure_policy"] = "skip"
     if not args.resume and any(path.exists() for path in paths):
         raise ValueError("output/checkpoint exists; use --resume or a new --output")
     if args.resume and not manifest.exists():
@@ -161,9 +166,7 @@ def run(args, references):
         if args.resume:
             previous = json.loads(manifest.read_text(encoding="utf-8"))
             if previous != config:
-                if not getattr(args, "resume_with_larger_token_budget", False):
-                    raise ValueError("resume configuration or input differs from checkpoint")
-                check_token_budget_resume(previous, config)
+                check_skip_policy_migration(previous, config)
                 previous_config = previous
         else:
             if (manifest.exists() or output.exists()
@@ -180,7 +183,8 @@ def run(args, references):
                 raise ValueError("checkpoint source differs from input")
             targets = record.get("tgts", [])
             if (len(targets) != 1 or targets[0].get("language") != args.target_language
-                    or not isinstance(targets[0].get("base"), str) or not targets[0]["base"].strip()):
+                    or not ((isinstance(targets[0].get("base"), str) and targets[0]["base"].strip())
+                            or (targets[0].get("base") is None and entry.get("skip_reason")))):
                 raise ValueError("invalid checkpoint translation")
             if targets[0].get("human") != references[index]["tgts"][0]["human"]:
                 raise ValueError("checkpoint human reference differs from input")
@@ -192,7 +196,7 @@ def run(args, references):
                 history_stream.flush()
                 os.fsync(history_stream.fileno())
             atomic_json(manifest, config)
-            print(f"Preserving {len(completed)} completed translations; increasing token limits. "
+            print(f"Preserving {len(completed)} completed rows; using 512 tokens and skipping failures. "
                   f"Previous/current settings and script hashes recorded in {history}", flush=True)
         if len(completed) < len(references):
             from vllm import LLM, SamplingParams
@@ -220,6 +224,7 @@ def run(args, references):
         if reference_output:
             export_dataset(reference_output, [{"record": reference} for reference in references])
     print(f"Student translations with human references: {output}")
+    print(f"Skipped translations: {sum(bool(entry.get('skip_reason')) for entry in completed)}")
     if reference_output:
         print(f"Separate human references: {reference_output}")
 
@@ -244,12 +249,8 @@ def parse_args():
     parser.add_argument("--limit", type=int, help="translate first N pairs; validate the entire TSV")
     parser.add_argument("--skip-header", action="store_true", help="skip the first TSV line")
     parser.add_argument("--resume", action="store_true")
-    parser.add_argument("--resume-with-larger-token-budget", action="store_true",
-                        help="resume with increased token limits; records old/new settings and script hashes")
     parser.add_argument("--dry-run", action="store_true", help="validate TSV and show model input; no GPU needed")
     args = parser.parse_args()
-    if args.resume_with_larger_token_budget:
-        args.resume = True
     if args.source_language == args.target_language:
         parser.error("source and target languages must differ")
     if any(value <= 0 for value in (args.batch_size, args.tensor_parallel_size,

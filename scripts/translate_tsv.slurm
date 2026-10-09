@@ -38,7 +38,24 @@ export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export OMP_NUM_THREADS=8
 
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
-srun python -u scripts/translate_tsv.py \
+# Check the GPU inside an allocated step before opening the translation checkpoint.
+srun --gres=gpu:1 python -u - <<'PY'
+import os
+import socket
+import subprocess
+import torch
+
+print("GPU preflight on", socket.gethostname(), flush=True)
+for name in ("SLURM_JOB_GPUS", "SLURM_STEP_GPUS", "CUDA_VISIBLE_DEVICES"):
+    print(f"{name}={os.environ.get(name, '<unset>')}", flush=True)
+subprocess.run(["nvidia-smi"], check=True)
+print("PyTorch:", torch.__version__, "CUDA build:", torch.version.cuda, flush=True)
+torch.cuda.init()
+probe = torch.empty(1, device="cuda:0")
+print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
+PY
+
+srun --gres=gpu:1 python -u scripts/translate_tsv.py \
   --input data/roche.random.10K.enfr.gz \
   --source-language en \
   --target-language fr \

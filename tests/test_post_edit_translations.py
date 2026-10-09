@@ -130,6 +130,15 @@ class PostEditTests(unittest.TestCase):
                 payload = json.loads(messages(student, None, "fr", "prompt")[1]["content"])
                 self.assertEqual(payload["student_translation"], "  Bonjour\nmonde.")
 
+    def test_null_base_is_preserved_without_calling_teacher(self):
+        student = {"language": "en", "seg": "Too long.", "tgts": [{
+            "language": "fr", "base": None, "human": "Trop long."}]}
+        path = self.write_rows("skipped.gz", [student])
+        pairs = load_pairs(path)
+        result = generate_batch(None, FakeTokenizer(), None, pairs, "prompt", self.args)[0]
+        self.assertIsNone(result["record"]["tgts"][0]["corrected"])
+        self.assertEqual(result["targets"][0]["finish_reason"], "skipped")
+
     def test_inconsistent_or_invented_edits_rejected(self):
         with self.assertRaisesRegex(ValueError, "disagree"):
             validate_result(json.dumps(answer("Salut.")), "Bonjour.")

@@ -67,6 +67,11 @@ def targets(row, field="base"):
                    "human": ("human", "human_reference", "seg")}
         key = next((key for key in aliases[field] if key in target), None)
         segment = target.get(key)
+        if field == "base" and key == "base" and segment is None:
+            if target["language"] in result:
+                raise ValueError("duplicate target language")
+            result[target["language"]] = None
+            continue
         if not isinstance(segment, str) or not segment.strip():
             raise ValueError(f"expected nonempty target {field} (or legacy seg)")
         if target["language"] in result:
@@ -208,6 +213,8 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
     jobs = []
     for index, (student, reference) in enumerate(batch):
         for language, original in targets(student).items():
+            if original is None:
+                continue
             text = tokenizer.apply_chat_template(
                 messages(student, reference, language, prompt), tokenize=False,
                 add_generation_prompt=True, enable_thinking=False)
@@ -216,7 +223,7 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
                                  "increase --max-model-len (input is never truncated)")
             jobs.append((index, language, original, text))
     outputs = llm.generate([{"prompt_token_ids": tokenizer.encode(job[3], add_special_tokens=False)}
-                            for job in jobs], sampling, use_tqdm=False)
+                            for job in jobs], sampling, use_tqdm=False) if jobs else []
     if len(outputs) != len(jobs):
         raise ValueError("teacher returned an unexpected number of outputs")
     entries = [{"record": deepcopy(student), "targets": []} for student, _ in batch]
@@ -226,6 +233,12 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
         for target in entry["record"]["tgts"]:
             language = target["language"]
             target["base"] = originals[language]
+            if originals[language] is None:
+                target["corrected"] = None
+                entry["targets"].append({"language": language, "original_translation": None,
+                    "corrected_translation": None, "edits": None, "edit_fraction": None,
+                    "large_edit": False, "raw_response": None, "finish_reason": "skipped",
+                    "extraction_error": "base translation unavailable"})
             if "human" not in target and "human_reference" in target:
                 target["human"] = target["human_reference"]
             target.pop("student", None)

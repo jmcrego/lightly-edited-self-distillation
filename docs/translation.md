@@ -42,9 +42,11 @@ python scripts/translate_tsv.py \
 
 For a pilot, add `--limit 100` and choose a separate pilot output. The entire TSV
 is still validated. Default batch size is 32, context limit 2048, generation
-limit 512, seed 42, and temperature 0. Inputs are never truncated; empty or
-truncated generations stop the run. Increase the token limits as needed within
-the model's supported context length.
+limit 512, seed 42, and temperature 0. Inputs are never truncated. Sources that
+exceed the context budget, empty outputs, and generations that hit the output
+limit are skipped without stopping. Their rows remain aligned with `base: null`;
+the audit records the reason and any generated response. The post-editor skips
+these targets and retains `corrected: null`. Exclude null targets from training.
 
 Outputs use gzip JSONL, compatible with the post-editor:
 
@@ -69,13 +71,12 @@ input hashes, prompt contents, and model/settings in `OUTPUT.manifest.json`. Exi
 require `--resume`; resuming requires the same input, script, model, and options.
 Pin `--revision` for a Hub model, or keep local model snapshots immutable.
 
-If translation stops because an output hits its token limit, resume with a larger
-budget using `--resume-with-larger-token-budget --max-new-tokens 1024`. Increase
-`--max-model-len` too if the input plus output reserve would exceed the context.
-This explicit mode preserves completed rows and permits only increased token
-limits and the updated script hash; model, input, prompt, and other settings must
-match. Old/new configurations and the checkpoint boundary are recorded in
-`OUTPUT.resume-history.jsonl`. Ordinary `--resume` remains strict.
+Use ordinary `--resume` to continue interrupted runs. Existing stop-on-error
+checkpoints migrate once to this skip policy and the default 512-token output
+limit, including checkpoints previously configured for 1024 tokens. Completed
+rows remain unchanged; input, model, prompt, context limit, and other settings
+must match. Old/new configurations, script hashes, and the checkpoint boundary
+are recorded in `OUTPUT.resume-history.jsonl`. Subsequent resumes remain strict.
 
 Feed the self-contained file to the correction job:
 
