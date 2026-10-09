@@ -16,16 +16,12 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CATEGORIES = ["meaning", "omission", "addition", "terminology", "grammar",
-              "naturalness", "formatting"]
+CATEGORIES = ["meaning", "omission", "addition", "terminology", "grammar", "naturalness", "formatting"]
 RESULT_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["corrected_translation", "domain", "domain_confidence", "needs_review", "edits"],
+    "required": ["corrected_translation", "edits"],
     "properties": {
         "corrected_translation": {"type": "string", "minLength": 1},
-        "domain": {"type": "string", "minLength": 1},
-        "domain_confidence": {"type": "string", "enum": ["low", "medium", "high"]},
-        "needs_review": {"type": "boolean"},
         "edits": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["before", "after", "category", "reason"],
@@ -124,12 +120,8 @@ def validate_result(text, original):
     corrected = result["corrected_translation"]
     if not isinstance(corrected, str) or not corrected.strip():
         raise ValueError("empty or invalid corrected translation")
-    if not isinstance(result["domain"], str) or not result["domain"].strip():
-        raise ValueError("invalid domain")
-    if result["domain_confidence"] not in ("low", "medium", "high"):
-        raise ValueError("invalid domain confidence")
-    if not isinstance(result["needs_review"], bool) or not isinstance(result["edits"], list):
-        raise ValueError("invalid review flag or edits")
+    if not isinstance(result["edits"], list):
+        raise ValueError("invalid edits list")
     if (corrected != original) != bool(result["edits"]):
         raise ValueError("translation change and edits list disagree")
     for edit in result["edits"]:
@@ -233,7 +225,6 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
         result.update({"language": language, "original_translation": original,
                        "edit_fraction": fraction, "large_edit": fraction > args.review_edit_fraction,
                        "raw_response": answer.text})
-        result["needs_review"] |= result["large_edit"]
         entries[index]["targets"].append(result)
         for target in entries[index]["record"]["tgts"]:
             if target["language"] == language:
@@ -316,7 +307,6 @@ def run(args, pairs, prompt):
                    "unchanged_translations": len(details) - changed, 
                    "changed_translations": changed,
                    "changed_percent": 100 * changed / len(details),
-                   "needs_review": sum(t["needs_review"] for t in details),
                    "large_edits": sum(t["large_edit"] for t in details),
                    "mean_edit_fraction": sum(t["edit_fraction"] for t in details) / len(details)}
         atomic_json(summary_path, summary)

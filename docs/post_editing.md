@@ -1,7 +1,7 @@
 # Minimal Post-Editing on Jean Zay
 
 The teacher sees the source, TranslateGemma translation, and human reference.
-It infers a domain only when supported, corrects actual errors, and preserves
+It uses supported domain context, corrects actual errors, and preserves
 valid student wording. The reference is evidence, not a wording template.
 Unchanged translations remain in the training dataset.
 
@@ -184,10 +184,10 @@ checks alignment throughout both files.
   target `seg` replaced by the corrected synthetic translation. No teacher
   explanations enter the SFT targets. Original extra fields are preserved.
 - `*.audit.jsonl`: durable checkpoint, one record per source line, containing
-  the corrected training record, original translations, teacher domain labels,
-  literal edit spans, brief reasons, raw JSON responses, and review flags.
+  the corrected training record, original translations,
+  literal edit spans, brief reasons, raw JSON responses, and computed large-edit flags.
 - `*.manifest.json`: input hashes, prompt, script hash, and run settings.
-- `*.stats.json`: changed/unchanged counts, percentages, and review counts.
+- `*.stats.json`: changed/unchanged counts, percentages, and large-edit counts.
 - `*.failure.json`: rejected teacher response and source line, if inference
   stops on a validation failure. This diagnostic is never used as training data.
 
@@ -205,9 +205,8 @@ edits. Changed generation settings require a new output path.
 Edits above `--review-edit-fraction` (default 0.30) are flagged, not clipped or
 automatically rejected. The fraction is punctuation-sensitive token changes
 from sequence alignment divided by the longer token count; it is an audit
-heuristic, not a semantic quality score. Teacher ambiguity flags also trigger
-review. Flagged translations ARE included in the export: inspect them before
-using the corpus for training. Domain labels and reasons are unverified teacher
+heuristic, not a semantic quality score. Flagged translations ARE included in
+the export. The teacher does not predict a review flag. Edit reasons are unverified teacher
 judgments. Structural validation cannot establish translation correctness.
 
 Local checks:

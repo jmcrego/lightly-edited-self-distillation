@@ -18,8 +18,7 @@ def row(source="Hello.", target="Bonjour."):
 
 
 def answer(corrected="Bonjour.", edits=None):
-    return {"corrected_translation": corrected, "domain": "general",
-            "domain_confidence": "low", "needs_review": False,
+    return {"corrected_translation": corrected,
             "edits": [] if edits is None else edits}
 
 
@@ -97,7 +96,8 @@ class PostEditTests(unittest.TestCase):
                                 [(student, row())], "prompt", self.args)[0]
         self.assertEqual(result["record"]["tgts"][0]["seg"], "Bonjour.")
         self.assertEqual(student["tgts"][0]["seg"], "Au revoir.")
-        self.assertTrue(result["targets"][0]["needs_review"])
+        self.assertTrue(result["targets"][0]["large_edit"])
+        self.assertNotIn("needs_review", result["targets"][0])
 
     def test_inconsistent_or_invented_edits_rejected(self):
         with self.assertRaisesRegex(ValueError, "disagree"):
