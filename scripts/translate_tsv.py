@@ -110,9 +110,21 @@ def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
         if not isinstance(answer.text, str) or not answer.text.strip():
             raise ValueError(f"input row {line}: empty model translation")
         record = deepcopy(reference)
-        record["tgts"][0]["base"] = answer.text
+        record["tgts"][0]["base"] = answer.text.rstrip()
         entries.append({"line": line, "record": record})
     return entries
+
+
+def check_token_budget_resume(previous, current):
+    allowed = {"max_model_len", "max_new_tokens", "script_sha256"}
+    if ({key: value for key, value in previous.items() if key not in allowed}
+            != {key: value for key, value in current.items() if key not in allowed}):
+        raise ValueError("token-budget resume cannot change input, model, prompt, or other settings")
+    for key in ("max_model_len", "max_new_tokens"):
+        if current[key] < previous[key]:
+            raise ValueError(f"token-budget resume cannot decrease {key}")
+    if all(current[key] == previous[key] for key in ("max_model_len", "max_new_tokens")):
+        raise ValueError("token-budget resume requires increased token limits")
 
 
 def run(args, references):
@@ -145,9 +157,14 @@ def run(args, references):
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise ValueError("another job is using this output checkpoint") from error
+        previous_config = None
         if args.resume:
-            if json.loads(manifest.read_text(encoding="utf-8")) != config:
-                raise ValueError("resume configuration or input differs from checkpoint")
+            previous = json.loads(manifest.read_text(encoding="utf-8"))
+            if previous != config:
+                if not getattr(args, "resume_with_larger_token_budget", False):
+                    raise ValueError("resume configuration or input differs from checkpoint")
+                check_token_budget_resume(previous, config)
+                previous_config = previous
         else:
             if (manifest.exists() or output.exists()
                     or (reference_output and reference_output.exists()) or stream.tell()):
@@ -167,6 +184,16 @@ def run(args, references):
                 raise ValueError("invalid checkpoint translation")
             if targets[0].get("human") != references[index]["tgts"][0]["human"]:
                 raise ValueError("checkpoint human reference differs from input")
+        if previous_config is not None:
+            history = Path(str(output) + ".resume-history.jsonl")
+            with history.open("a", encoding="utf-8") as history_stream:
+                history_stream.write(json.dumps({"completed_rows": len(completed),
+                                                 "previous": previous_config, "next": config}) + "\n")
+                history_stream.flush()
+                os.fsync(history_stream.fileno())
+            atomic_json(manifest, config)
+            print(f"Preserving {len(completed)} completed translations; increasing token limits. "
+                  f"Previous/current settings and script hashes recorded in {history}", flush=True)
         if len(completed) < len(references):
             from vllm import LLM, SamplingParams
 
@@ -217,8 +244,12 @@ def parse_args():
     parser.add_argument("--limit", type=int, help="translate first N pairs; validate the entire TSV")
     parser.add_argument("--skip-header", action="store_true", help="skip the first TSV line")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--resume-with-larger-token-budget", action="store_true",
+                        help="resume with increased token limits; records old/new settings and script hashes")
     parser.add_argument("--dry-run", action="store_true", help="validate TSV and show model input; no GPU needed")
     args = parser.parse_args()
+    if args.resume_with_larger_token_budget:
+        args.resume = True
     if args.source_language == args.target_language:
         parser.error("source and target languages must differ")
     if any(value <= 0 for value in (args.batch_size, args.tensor_parallel_size,

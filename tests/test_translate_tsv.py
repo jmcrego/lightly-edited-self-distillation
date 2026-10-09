@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 from scripts.post_edit_translations import load_pairs
 from scripts.translate_tsv import (
-    gemma3_rope_compatibility, generate_batch, load_tsv, run, translation_messages,
+    check_token_budget_resume, gemma3_rope_compatibility, generate_batch, load_tsv, run, translation_messages,
 )
 
 
@@ -20,6 +20,20 @@ class Tokenizer:
 
 
 class TranslationTests(unittest.TestCase):
+    def test_token_budget_resume_is_restricted_to_increases(self):
+        previous = {"model": "same", "input_sha256": "same", "prompt": "same",
+                    "max_new_tokens": 512, "max_model_len": 2048, "script_sha256": "old"}
+        current = {**previous, "max_new_tokens": 1024, "script_sha256": "new"}
+        check_token_budget_resume(previous, current)
+        for change in ({"model": "different"}, {"input_sha256": "different"},
+                       {"prompt": "different"}, {"max_new_tokens": 256},
+                       {"max_model_len": 1024}):
+            with self.subTest(change=change):
+                with self.assertRaises(ValueError):
+                    check_token_budget_resume(previous, {**current, **change})
+        with self.assertRaises(ValueError):
+            check_token_budget_resume(previous, {**previous, "script_sha256": "new"})
+
     def test_gemma3_rope_preserves_full_scaling_and_local_frequency(self):
         nested = {"full_attention": {"factor": 8.0, "rope_type": "linear"},
                   "sliding_attention": {"rope_type": "default"}}
@@ -106,6 +120,14 @@ class TranslationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "context budget"):
             generate_batch(None, Tokenizer(), None, rows, self.args)
 
+    def test_base_output_trims_only_trailing_whitespace(self):
+        rows = load_tsv(self.input, "en", "fr")[:1]
+        llm = SimpleNamespace(generate=lambda *args, **kwargs: [SimpleNamespace(
+            outputs=[SimpleNamespace(text="  Bonjour\nmonde. \t\r\n", finish_reason="stop")])])
+        result = generate_batch(llm, Tokenizer(), None, rows, self.args)[0]
+        self.assertEqual(result["record"]["tgts"][0]["base"], "  Bonjour\nmonde.")
+        self.assertEqual(result["record"]["tgts"][0]["human"], "Bonjour.")
+
     def test_export_resume_and_posteditor_compatibility(self):
         rows = load_tsv(self.input, "en", "fr")
         class LLM:
@@ -134,6 +156,14 @@ class TranslationTests(unittest.TestCase):
         self.args.resume = True
         # Complete checkpoints can re-export without importing/loading vLLM.
         run(self.args, rows)
+        self.args.max_new_tokens = 1024
+        self.args.resume_with_larger_token_budget = True
+        run(self.args, rows)
+        history = json.loads(Path(str(self.args.output) + ".resume-history.jsonl").read_text())
+        self.assertEqual(history["completed_rows"], 2)
+        self.assertEqual(history["previous"]["max_new_tokens"], 512)
+        self.assertEqual(history["next"]["max_new_tokens"], 1024)
+        self.args.resume_with_larger_token_budget = False
         self.args.resume = False
         self.args.output = self.root / "self-contained.jsonl.gz"
         self.args.references_output = None
@@ -154,6 +184,33 @@ class TranslationTests(unittest.TestCase):
             stream.write(json.dumps(record) + "\n")
         with self.assertRaisesRegex(ValueError, "empty embedded"):
             load_pairs(path)
+
+    def test_larger_budget_resume_preserves_partial_checkpoint(self):
+        rows = load_tsv(self.input, "en", "fr")
+        self.args.batch_size = 1
+        class LLM:
+            def __init__(self, **kwargs):
+                self.calls = 0
+
+            def get_tokenizer(self):
+                return Tokenizer()
+
+            def generate(self, prompts, sampling, **kwargs):
+                self.calls += 1
+                reason = "length" if sampling.max_tokens == 512 and self.calls == 2 else "stop"
+                return [SimpleNamespace(outputs=[SimpleNamespace(
+                    text=f"Translation with budget {sampling.max_tokens}.", finish_reason=reason)])]
+        fake = SimpleNamespace(LLM=LLM, SamplingParams=lambda **kwargs: SimpleNamespace(**kwargs))
+        with patch.dict(sys.modules, {"vllm": fake}):
+            with self.assertRaisesRegex(ValueError, "length"):
+                run(self.args, rows)
+            self.args.resume = True
+            self.args.resume_with_larger_token_budget = True
+            self.args.max_new_tokens = 1024
+            run(self.args, rows)
+        pairs = load_pairs(self.args.output)
+        self.assertEqual(pairs[0][0]["tgts"][0]["base"], "Translation with budget 512.")
+        self.assertEqual(pairs[1][0]["tgts"][0]["base"], "Translation with budget 1024.")
 
 
 if __name__ == "__main__":

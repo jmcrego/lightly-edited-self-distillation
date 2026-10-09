@@ -71,7 +71,7 @@ def targets(row, field="base"):
             raise ValueError(f"expected nonempty target {field} (or legacy seg)")
         if target["language"] in result:
             raise ValueError("duplicate target language")
-        result[target["language"]] = segment
+        result[target["language"]] = segment.rstrip() if field == "base" else segment
     return result
 
 

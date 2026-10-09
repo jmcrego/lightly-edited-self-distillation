@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from scripts.post_edit_translations import (
     edit_fraction, export_dataset, generate_batch, load_pairs, messages,
-    read_checkpoint, records, run, validate_result,
+    read_checkpoint, records, run, targets, validate_result,
 )
 
 
@@ -87,7 +87,7 @@ class PostEditTests(unittest.TestCase):
                                 [(student, row())], "prompt", self.args)[0]
         self.assertEqual(result["record"]["id"], student["id"])
         self.assertEqual(result["record"]["seg"], student["seg"])
-        self.assertEqual(result["record"]["tgts"][0]["base"], " Bonjour. ")
+        self.assertEqual(result["record"]["tgts"][0]["base"], " Bonjour.")
         self.assertEqual(result["record"]["tgts"][0]["corrected"], " Bonjour. ")
         self.assertNotIn("seg", result["record"]["tgts"][0])
         self.assertEqual(result["targets"][0]["edit_fraction"], 0)
@@ -118,6 +118,17 @@ class PostEditTests(unittest.TestCase):
         self.assertEqual(result["record"]["tgts"][0], {
             "language": "fr", "base": "Salut.", "human": "Bonjour.",
             "corrected": "Salut."})
+
+    def test_base_reader_trims_new_and_legacy_fields_only(self):
+        for field in ("base", "student", "seg"):
+            student = {"language": "en", "seg": "Hello.", "tgts": [{
+                "language": "fr", field: "  Bonjour\nmonde. \t\r\n",
+                "human": "Référence.\n"}]}
+            with self.subTest(field=field):
+                self.assertEqual(targets(student)["fr"], "  Bonjour\nmonde.")
+                self.assertEqual(targets(student, "human")["fr"], "Référence.\n")
+                payload = json.loads(messages(student, None, "fr", "prompt")[1]["content"])
+                self.assertEqual(payload["student_translation"], "  Bonjour\nmonde.")
 
     def test_inconsistent_or_invented_edits_rejected(self):
         with self.assertRaisesRegex(ValueError, "disagree"):

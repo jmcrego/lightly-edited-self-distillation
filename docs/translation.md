@@ -55,6 +55,9 @@ Outputs use gzip JSONL, compatible with the post-editor:
 The target's `base` contains the generated translation; `human` contains
 the original second TSV column. The post-editor automatically reads the embedded
 reference. Use `--references-output` only if you also want a separate reference file.
+Trailing whitespace is removed from base-model output with `rstrip()`; leading
+whitespace and internal line breaks are preserved. The post-editor applies the
+same cleanup when reading base translations from existing files.
 Post-editing adds `corrected`, preserving `base` and `human`. `seg`
 is reserved for the source in newly written records. Readers still accept legacy
 target `seg`, `student`, and `human_reference` fields; existing completed
@@ -65,6 +68,14 @@ The script writes `OUTPUT.audit.jsonl` after each successful batch and records
 input hashes, prompt contents, and model/settings in `OUTPUT.manifest.json`. Existing outputs
 require `--resume`; resuming requires the same input, script, model, and options.
 Pin `--revision` for a Hub model, or keep local model snapshots immutable.
+
+If translation stops because an output hits its token limit, resume with a larger
+budget using `--resume-with-larger-token-budget --max-new-tokens 1024`. Increase
+`--max-model-len` too if the input plus output reserve would exceed the context.
+This explicit mode preserves completed rows and permits only increased token
+limits and the updated script hash; model, input, prompt, and other settings must
+match. Old/new configurations and the checkpoint boundary are recorded in
+`OUTPUT.resume-history.jsonl`. Ordinary `--resume` remains strict.
 
 Feed the self-contained file to the correction job:
 
