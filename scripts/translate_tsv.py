@@ -38,7 +38,7 @@ def load_tsv(path, source_language, target_language, limit=None, skip_header=Fal
             # Validate even rows beyond a pilot limit; never silently skip bad pairs.
             if limit is None or len(rows) < limit:
                 rows.append({"language": source_language, "seg": source,
-                             "tgts": [{"language": target_language, "seg": reference}]})
+                             "tgts": [{"language": target_language, "human": reference}]})
     if not rows:
         raise ValueError("no input sentence pairs")
     return rows
@@ -110,8 +110,7 @@ def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
         if not isinstance(answer.text, str) or not answer.text.strip():
             raise ValueError(f"input row {line}: empty model translation")
         record = deepcopy(reference)
-        record["tgts"][0]["human_reference"] = reference["tgts"][0]["seg"]
-        record["tgts"][0]["seg"] = answer.text
+        record["tgts"][0]["base"] = answer.text
         entries.append({"line": line, "record": record})
     return entries
 
@@ -124,7 +123,7 @@ def run(args, references):
     paths = tuple(path for path in (output, reference_output, audit, manifest) if path is not None)
     if len(set(paths)) != len(paths) or args.input.resolve() in paths:
         raise ValueError("input, outputs, and checkpoint paths must be distinct")
-    config = {"format_version": 2, "input_sha256": digest(args.input),
+    config = {"format_version": 4, "input_sha256": digest(args.input),
               "script_sha256": digest(Path(__file__)), "model": args.model,
               "revision": args.revision, "source_language": args.source_language,
               "target_language": args.target_language, "skip_header": args.skip_header,
@@ -164,9 +163,9 @@ def run(args, references):
                 raise ValueError("checkpoint source differs from input")
             targets = record.get("tgts", [])
             if (len(targets) != 1 or targets[0].get("language") != args.target_language
-                    or not isinstance(targets[0].get("seg"), str) or not targets[0]["seg"].strip()):
+                    or not isinstance(targets[0].get("base"), str) or not targets[0]["base"].strip()):
                 raise ValueError("invalid checkpoint translation")
-            if targets[0].get("human_reference") != references[index]["tgts"][0]["seg"]:
+            if targets[0].get("human") != references[index]["tgts"][0]["human"]:
                 raise ValueError("checkpoint human reference differs from input")
         if len(completed) < len(references):
             from vllm import LLM, SamplingParams
@@ -201,7 +200,7 @@ def run(args, references):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True, help="source<TAB>reference TSV, optionally .gz")
-    parser.add_argument("--output", type=Path, required=True, help="student translations, .jsonl.gz or .json.gz")
+    parser.add_argument("--output", type=Path, required=True, help="base translations, .jsonl.gz or .json.gz")
     parser.add_argument("--references-output", type=Path, help="optionally export a separate reference file")
     parser.add_argument("--source-language", required=True, help="TranslateGemma language code, e.g. en")
     parser.add_argument("--target-language", required=True, help="TranslateGemma language code, e.g. fr")

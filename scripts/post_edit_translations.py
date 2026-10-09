@@ -60,7 +60,7 @@ def records(path):
                 raise ValueError(f"{path}:{number}: {error}") from error
 
 
-def targets(row):
+def targets(row, field="base"):
     if not isinstance(row.get("language"), str) or not isinstance(row.get("seg"), str):
         raise ValueError("source requires string language and seg")
     if not row["seg"].strip():
@@ -71,11 +71,15 @@ def targets(row):
     for target in row["tgts"]:
         if not isinstance(target, dict) or not isinstance(target.get("language"), str):
             raise ValueError("invalid target language")
-        if not isinstance(target.get("seg"), str) or not target["seg"].strip():
-            raise ValueError("expected nonempty target seg")
+        aliases = {"base": ("base", "student", "seg"),
+                   "human": ("human", "human_reference", "seg")}
+        key = next((key for key in aliases[field] if key in target), None)
+        segment = target.get(key)
+        if not isinstance(segment, str) or not segment.strip():
+            raise ValueError(f"expected nonempty target {field} (or legacy seg)")
         if target["language"] in result:
             raise ValueError("duplicate target language")
-        result[target["language"]] = target["seg"]
+        result[target["language"]] = segment
     return result
 
 
@@ -90,15 +94,16 @@ def load_pairs(synthetic, references=None, limit=None, use_embedded_reference=Tr
                 raise ValueError("input record counts differ")
             student_targets = targets(student)
             if references is None and use_embedded_reference:
-                embedded = [target.get("human_reference") for target in student["tgts"]]
-                if any("human_reference" in target for target in student["tgts"]):
+                embedded = [target["human"] if "human" in target else target.get("human_reference")
+                            for target in student["tgts"]]
+                if any("human" in target or "human_reference" in target for target in student["tgts"]):
                     if any(not isinstance(text, str) or not text.strip() for text in embedded):
                         raise ValueError("missing or empty embedded human reference")
                     reference = {"language": student["language"], "seg": student["seg"],
-                                 "tgts": [{"language": target["language"], "seg": text}
+                                 "tgts": [{"language": target["language"], "human": text}
                                           for target, text in zip(student["tgts"], embedded)]}
             if reference is not None:
-                reference_targets = targets(reference)
+                reference_targets = targets(reference, "human")
                 if (student["language"], student["seg"]) != (reference["language"], reference["seg"]):
                     raise ValueError("source or source language mismatch")
                 if student_targets.keys() != reference_targets.keys():
@@ -116,7 +121,7 @@ def messages(student, reference, language, system_prompt):
     payload = {"source_language": student["language"], "target_language": language,
                "source": student["seg"], "student_translation": targets(student)[language]}
     if reference is not None:
-        payload["human_reference"] = targets(reference)[language]
+        payload["human_reference"] = targets(reference, "human")[language]
     return [{"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
 
@@ -130,6 +135,11 @@ def validate_result(text, original):
         raise ValueError("empty or invalid corrected translation")
     if not isinstance(result["edits"], list):
         raise ValueError("invalid edits list")
+    # A no-edit response may drop boundary whitespace while copying the text.
+    # Restore the original bytes rather than treating that as a correction.
+    if not result["edits"] and corrected.strip() == original.strip():
+        corrected = original
+        result["corrected_translation"] = original
     if (corrected != original) != bool(result["edits"]):
         raise ValueError("translation change and edits list disagree")
     for edit in result["edits"]:
@@ -217,6 +227,19 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
     if len(outputs) != len(jobs):
         raise ValueError("teacher returned an unexpected number of outputs")
     entries = [{"record": deepcopy(student), "targets": []} for student, _ in batch]
+    for entry, (student, reference) in zip(entries, batch):
+        originals = targets(student)
+        references = targets(reference, "human") if reference is not None else {}
+        for target in entry["record"]["tgts"]:
+            language = target["language"]
+            target["base"] = originals[language]
+            if "human" not in target and "human_reference" in target:
+                target["human"] = target["human_reference"]
+            target.pop("student", None)
+            target.pop("human_reference", None)
+            target.pop("seg", None)
+            if language in references:
+                target["human"] = references[language]
     for (index, language, original, _), output in zip(jobs, outputs):
         answer = output.outputs[0]
         if answer.finish_reason != "stop":
@@ -236,7 +259,7 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
         entries[index]["targets"].append(result)
         for target in entries[index]["record"]["tgts"]:
             if target["language"] == language:
-                target["seg"] = result["corrected_translation"]
+                target["corrected"] = result["corrected_translation"]
     return entries
 
 
@@ -326,7 +349,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--synthetic", type=Path, default=ROOT / "data/transgemma.10_data.jsonl.gz")
     parser.add_argument("--references", type=Path,
-                        help="separate reference file; otherwise read embedded human_reference fields")
+                        help="separate reference file; otherwise read embedded human fields")
     parser.add_argument("--no-reference", action="store_true", help="use source and student only")
     parser.add_argument("--output", type=Path, default=ROOT / "data/postedited.10_data.jsonl.gz")
     parser.add_argument("--prompt", type=Path, default=ROOT / "prompts/minimal_post_edit.txt")
@@ -369,7 +392,7 @@ def main():
         pairs = load_pairs(args.synthetic, args.references, args.limit,
                            use_embedded_reference=not args.no_reference)
         if not args.no_reference and any(reference is None for _, reference in pairs):
-            raise ValueError("human references are required; embed human_reference in each target "
+            raise ValueError("human references are required; embed human in each target "
                              "or supply --references")
         print(f"Validated {len(pairs):,} selected source lines", flush=True)
         if args.dry_run:

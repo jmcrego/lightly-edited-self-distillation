@@ -46,9 +46,11 @@ def translations(record, path, line_number):
         if not isinstance(target, dict):
             raise ValueError(f"{path}:{line_number}: invalid translation")
         language = target.get("language")
-        segment = target.get("seg")
+        field = next((key for key in ("corrected", "base", "student", "human", "human_reference", "seg")
+                      if key in target), None)
+        segment = target.get(field)
         if not isinstance(language, str) or not isinstance(segment, str):
-            raise ValueError(f"{path}:{line_number}: invalid translation language or seg")
+            raise ValueError(f"{path}:{line_number}: invalid translation language or text")
         if language in result:
             raise ValueError(f"{path}:{line_number}: duplicate target language {language!r}")
         result[language] = segment

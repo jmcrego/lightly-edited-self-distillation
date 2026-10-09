@@ -116,8 +116,10 @@ evaluation-ready. Inspect these results before using the tests.
 
 Outputs:
 
-- `CORPUS.train.jsonl.gz`, `.dev.jsonl.gz`, and `.test.jsonl.gz`: records compatible
-  with the existing translation scripts (`seg`, `language`, `tgts`), plus provenance.
+- `CORPUS.train.jsonl.gz`, `.dev.jsonl.gz`, and `.test.jsonl.gz`: source text in
+  `seg`, references in `tgts[].human`, language codes, and provenance.
+  Existing prepared files with references in `tgts[].seg` or
+  `tgts[].human_reference` remain readable.
 - `rejections.jsonl.gz`: rejected texts, reasons, metadata, and language checks.
 - `duplicate_links.jsonl.gz`: exact-source and verified near-source connections.
 - `assignments.jsonl.gz`: input row IDs, connected groups, splits, and retention flags.

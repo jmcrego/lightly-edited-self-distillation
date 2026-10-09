@@ -49,12 +49,18 @@ the model's supported context length.
 Outputs use gzip JSONL, compatible with the post-editor:
 
 ```json
-{"language":"en","seg":"Hello.","tgts":[{"language":"fr","seg":"Bonjour.","human_reference":"Salut."}]}
+{"language":"en","seg":"Hello.","tgts":[{"language":"fr","base":"Bonjour.","human":"Salut."}]}
 ```
 
-The target's `seg` contains the generated translation; `human_reference` contains
+The target's `base` contains the generated translation; `human` contains
 the original second TSV column. The post-editor automatically reads the embedded
 reference. Use `--references-output` only if you also want a separate reference file.
+Post-editing adds `corrected`, preserving `base` and `human`. `seg`
+is reserved for the source in newly written records. Readers still accept legacy
+target `seg`, `student`, and `human_reference` fields; existing completed
+translations do not need to be regenerated. The teacher prompt still uses
+`student_translation` and `human_reference` in its input payload; these are
+prompt names, not dataset fields.
 The script writes `OUTPUT.audit.jsonl` after each successful batch and records
 input hashes, prompt contents, and model/settings in `OUTPUT.manifest.json`. Existing outputs
 require `--resume`; resuming requires the same input, script, model, and options.

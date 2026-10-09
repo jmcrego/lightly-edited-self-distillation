@@ -90,9 +90,10 @@ class TranslationTests(unittest.TestCase):
         results = generate_batch(llm, tokenizer, None, rows[:1], self.args)
         self.assertEqual(tokenizer.messages, translation_messages('"Hello."', "en", "fr"))
         self.assertNotIn("Bonjour", json.dumps(tokenizer.messages))
-        self.assertEqual(results[0]["record"]["tgts"][0]["seg"], "Salut.")
-        self.assertEqual(results[0]["record"]["tgts"][0]["human_reference"], "Bonjour.")
-        self.assertEqual(rows[0]["tgts"][0]["seg"], "Bonjour.")
+        self.assertEqual(results[0]["record"]["tgts"][0]["base"], "Salut.")
+        self.assertNotIn("seg", results[0]["record"]["tgts"][0])
+        self.assertEqual(results[0]["record"]["tgts"][0]["human"], "Bonjour.")
+        self.assertEqual(rows[0]["tgts"][0]["human"], "Bonjour.")
 
     def test_truncation_empty_and_context_overflow_are_rejected(self):
         rows = load_tsv(self.input, "en", "fr")[:1]
@@ -123,9 +124,9 @@ class TranslationTests(unittest.TestCase):
             run(self.args, rows)
         pairs = load_pairs(self.args.output, self.args.references_output)
         self.assertEqual(len(pairs), 2)
-        self.assertEqual(pairs[0][1]["tgts"][0]["seg"], "Bonjour.")
+        self.assertEqual(pairs[0][1]["tgts"][0]["human"], "Bonjour.")
         embedded_pairs = load_pairs(self.args.output)
-        self.assertEqual(embedded_pairs[0][1]["tgts"][0]["seg"], "Bonjour.")
+        self.assertEqual(embedded_pairs[0][1]["tgts"][0]["human"], "Bonjour.")
         no_reference_pairs = load_pairs(self.args.output, use_embedded_reference=False)
         self.assertIsNone(no_reference_pairs[0][1])
         with self.assertRaisesRegex(ValueError, "exists"):

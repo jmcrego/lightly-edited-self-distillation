@@ -6,7 +6,7 @@ valid student wording. The reference is evidence, not a wording template.
 Unchanged translations remain in the training dataset.
 
 For files produced by `translate_tsv.py`, the human reference is stored in each
-target's `human_reference` field and read automatically when `--references` is
+target's `human` field and read automatically when `--references` is
 omitted. A separate `--references` JSONL file is still supported and takes
 precedence. The original default TranslateGemma input still uses the original
 `data/bitext.10_data.jsonl.gz` reference file. `--no-reference` disables both
@@ -187,9 +187,11 @@ checks alignment throughout both files.
 
 - `logs/postedit-<JOB_ID>.out`: Slurm stdout, progress, and summary.
 - `logs/postedit-<JOB_ID>.err`: Slurm stderr, warnings, and errors.
-- `data/postedited.10_data.jsonl.gz`: original source and target schema, with
-  target `seg` replaced by the corrected synthetic translation. No teacher
-  explanations enter the SFT targets. Original extra fields are preserved.
+- `data/postedited.10_data.jsonl.gz`: source text in `seg`, with target text in
+  `base`, `human` (when available), and `corrected`. The original
+  base text is retained; use `corrected` as the SFT target. Legacy target
+  `seg`/`student` and `human_reference` fields are read and converted to the named fields
+  on export. Teacher explanations stay in the audit. Other extra fields are preserved.
 - `*.audit.jsonl`: durable checkpoint, one record per source line, containing
   the corrected training record, original translations,
   literal edit spans, brief reasons, raw JSON responses, and computed large-edit flags.
@@ -208,6 +210,10 @@ or inconsistent teacher outputs. A failed batch stops the run before committing
 that batch, instead of silently using a reference or student fallback. Increase
 token/context budgets for truncation, or inspect the prompt/model for invalid
 edits. Changed generation settings require a new output path.
+
+If the teacher reports no edits and differs only in leading/trailing whitespace,
+the original translation is restored exactly. This counts as unchanged; internal
+whitespace, casing, and punctuation differences still require declared edits.
 
 Edits above `--review-edit-fraction` (default 0.30) are flagged, not clipped or
 automatically rejected. The fraction is punctuation-sensitive token changes

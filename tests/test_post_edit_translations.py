@@ -85,7 +85,11 @@ class PostEditTests(unittest.TestCase):
         student["id"] = "example"
         result = generate_batch(FakeLLM([answer(" Bonjour. ")]), FakeTokenizer(), None,
                                 [(student, row())], "prompt", self.args)[0]
-        self.assertEqual(result["record"], student)
+        self.assertEqual(result["record"]["id"], student["id"])
+        self.assertEqual(result["record"]["seg"], student["seg"])
+        self.assertEqual(result["record"]["tgts"][0]["base"], " Bonjour. ")
+        self.assertEqual(result["record"]["tgts"][0]["corrected"], " Bonjour. ")
+        self.assertNotIn("seg", result["record"]["tgts"][0])
         self.assertEqual(result["targets"][0]["edit_fraction"], 0)
 
     def test_correction_and_large_edit_flag(self):
@@ -94,10 +98,26 @@ class PostEditTests(unittest.TestCase):
                                  "category": "meaning", "reason": "Greeting, not farewell."}])
         result = generate_batch(FakeLLM([response]), FakeTokenizer(), None,
                                 [(student, row())], "prompt", self.args)[0]
-        self.assertEqual(result["record"]["tgts"][0]["seg"], "Bonjour.")
+        self.assertEqual(result["record"]["tgts"][0]["corrected"], "Bonjour.")
+        self.assertEqual(result["record"]["tgts"][0]["base"], "Au revoir.")
         self.assertEqual(student["tgts"][0]["seg"], "Au revoir.")
         self.assertTrue(result["targets"][0]["large_edit"])
         self.assertNotIn("needs_review", result["targets"][0])
+
+    def test_named_fields_use_student_not_existing_correction(self):
+        student = {"language": "en", "seg": "Hello.", "tgts": [{
+            "language": "fr", "student": "Salut.", "human_reference": "Bonjour.",
+            "corrected": "Existing correction."}]}
+        path = self.write_rows("embedded.gz", [student])
+        pairs = load_pairs(path)
+        payload = json.loads(messages(*pairs[0], "fr", "prompt")[1]["content"])
+        self.assertEqual(payload["student_translation"], "Salut.")
+        self.assertEqual(payload["human_reference"], "Bonjour.")
+        result = generate_batch(FakeLLM([answer("Salut.")]), FakeTokenizer(), None,
+                                pairs, "prompt", self.args)[0]
+        self.assertEqual(result["record"]["tgts"][0], {
+            "language": "fr", "base": "Salut.", "human": "Bonjour.",
+            "corrected": "Salut."})
 
     def test_inconsistent_or_invented_edits_rejected(self):
         with self.assertRaisesRegex(ValueError, "disagree"):
@@ -106,6 +126,27 @@ class PostEditTests(unittest.TestCase):
                                     "category": "meaning", "reason": "Example"}])
         with self.assertRaisesRegex(ValueError, "spans"):
             validate_result(json.dumps(result), "Bonjour.")
+
+    def test_no_edit_boundary_whitespace_restores_original(self):
+        for original, returned in (("Bonjour.\n", "Bonjour."),
+                                   ("  Bonjour.\t", "Bonjour."),
+                                   ("Bonjour.", "\nBonjour.\n")):
+            with self.subTest(original=original):
+                result = validate_result(json.dumps(answer(returned)), original)
+                self.assertEqual(result["corrected_translation"], original)
+                self.assertEqual(result["edits"], [])
+        result = generate_batch(FakeLLM([answer("Bonjour.")]), FakeTokenizer(), None,
+                                [(row(target="Bonjour.\n"), row())], "prompt", self.args)[0]
+        self.assertEqual(result["record"]["tgts"][0]["corrected"], "Bonjour.\n")
+        self.assertEqual(result["targets"][0]["edit_fraction"], 0)
+
+    def test_no_edit_internal_whitespace_or_casing_changes_rejected(self):
+        for original, returned in (("Bonjour  monde.", "Bonjour monde."),
+                                   ("Bonjour\nmonde.", "Bonjour monde."),
+                                   ("Bonjour.", "bonjour.")):
+            with self.subTest(original=original):
+                with self.assertRaisesRegex(ValueError, "disagree"):
+                    validate_result(json.dumps(answer(returned)), original)
 
     def test_truncation_rejected(self):
         with self.assertRaisesRegex(ValueError, "finish normally"):
@@ -141,7 +182,11 @@ class PostEditTests(unittest.TestCase):
         pairs = load_pairs(left, right)
         result = generate_batch(FakeLLM([answer(), answer("Hallo.")]), FakeTokenizer(),
                                 None, pairs, "prompt", self.args)[0]
-        self.assertEqual(result["record"], student)
+        self.assertEqual(result["record"]["tgts"], [
+            {"language": "fr", "base": "Bonjour.", "human": "Bonjour.",
+             "corrected": "Bonjour."},
+            {"language": "de", "base": "Hallo.", "human": "Guten Tag.",
+             "corrected": "Hallo."}])
 
     def test_edit_fraction_punctuation_sensitive(self):
         self.assertEqual(edit_fraction("hello", "hello"), 0)
@@ -175,7 +220,10 @@ class PostEditTests(unittest.TestCase):
         self.assertTrue(engine_calls[0]["language_model_only"])
         self.assertEqual(engine_calls[0]["gdn_prefill_backend"], "triton")
         self.assertNotIn("quantization", engine_calls[0])
-        self.assertEqual(list(records(self.args.output)), [row()])
+        exported = list(records(self.args.output))
+        self.assertEqual(exported[0]["tgts"][0], {
+            "language": "fr", "base": "Bonjour.", "human": "Bonjour.",
+            "corrected": "Bonjour."})
         with self.assertRaisesRegex(ValueError, "exists"):
             run(self.args, pairs, "prompt")
         self.args.resume = True

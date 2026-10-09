@@ -402,7 +402,7 @@ def prepare(args):
                 if not kept:
                     continue
                 record = {"id": f"{corpus}:{line}", "seg": source, "language": args.source,
-                          "tgts": [{"seg": target, "language": args.target}],
+                          "tgts": [{"human": target, "language": args.target}],
                           "corpus": corpus, "release": report[corpus]["release"],
                           "group": group, "alignment": json.loads(metadata),
                           "language_checks": json.loads(checks)}
