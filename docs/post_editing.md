@@ -152,7 +152,7 @@ its log files before executing the script. This directory is ignored by Git.
 
 ```bash
 mkdir -p logs
-sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm \
+sbatch --account=eut@h100 scripts/post_edit_translations.slurm \
   --limit 100 --output data/postedited.pilot.jsonl.gz
 ```
 
@@ -161,14 +161,14 @@ complete corpus into a different output:
 
 ```bash
 mkdir -p logs
-sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm
+sbatch --account=eut@h100 scripts/post_edit_translations.slurm
 ```
 
 Resume an interrupted full run with the same inputs, prompt, model, and options:
 
 ```bash
 mkdir -p logs
-sbatch --account=eut@h100 scripts/post_edit_jean_zay.slurm --resume
+sbatch --account=eut@h100 scripts/post_edit_translations.slurm --resume
 ```
 
 Use `--no-reference` for a source/student-only ablation. The default input names

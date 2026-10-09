@@ -61,7 +61,7 @@ Pin `--revision` for a Hub model, or keep local model snapshots immutable.
 Feed the aligned files to the correction job:
 
 ```bash
-sbatch scripts/post_edit_jean_zay.slurm \
+sbatch scripts/post_edit_translations.slurm \
   --synthetic data/domain.student.jsonl.gz \
   --references data/domain.references.jsonl.gz \
   --output data/domain.corrected.jsonl.gz
@@ -69,3 +69,28 @@ sbatch scripts/post_edit_jean_zay.slurm \
 
 TranslateGemma input contract:
 https://huggingface.co/google/translategemma-12b-it#usage
+
+## Jean Zay submission
+
+The launcher requests one H100 GPU on one node and activates the existing
+`venv-postedit-311-clean` environment in offline mode. It defaults to the Roche
+10K TSV, the shared TranslateGemma-12B model, and `prompts/base_translation.txt`.
+Submit from the repository root:
+
+```bash
+mkdir -p logs
+sbatch scripts/translate_tsv.slurm
+```
+
+Arguments after the script override its Python defaults. Use separate paths
+for a pilot so its outputs do not conflict with the full run:
+
+```bash
+sbatch scripts/translate_tsv.slurm --limit 100 \
+  --output data/roche.pilot.transgemma12b.jsonl.gz \
+  --references-output data/roche.pilot.references.jsonl.gz
+```
+
+Resume a full run with `sbatch scripts/translate_tsv.slurm --resume`. Logs are
+`logs/translate-JOBID.out` and `.err`. The initial time limit is four hours;
+adjust it based on pilot throughput and your allocation's limits.
