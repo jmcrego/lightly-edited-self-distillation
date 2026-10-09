@@ -5,6 +5,13 @@ It uses supported domain context, corrects actual errors, and preserves
 valid student wording. The reference is evidence, not a wording template.
 Unchanged translations remain in the training dataset.
 
+For files produced by `translate_tsv.py`, the human reference is stored in each
+target's `human_reference` field and read automatically when `--references` is
+omitted. A separate `--references` JSONL file is still supported and takes
+precedence. The original default TranslateGemma input still uses the original
+`data/bitext.10_data.jsonl.gz` reference file. `--no-reference` disables both
+reference sources; the current minimal post-editing prompt expects references.
+
 The default teacher candidate is `Qwen/Qwen3.5-122B-A10B-FP8`, the official
 FP8 checkpoint of the multilingual Qwen3.5 mixture-of-experts model (122B total,
 10B active parameters per token). Its size does not establish

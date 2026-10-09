@@ -7,8 +7,9 @@ preserved, and embedded tabs or multiline fields are not supported. Empty fields
 and malformed rows stop the run instead of silently changing alignment.
 
 Only source text and the source/target language codes enter the model prompt.
-Human references are exported separately and never shown to the translation
-model. The editable prompt is `prompts/base_translation.txt`, a Jinja chat
+Human references are embedded in the output and never shown to the translation
+model. A separate reference export is optional. The editable prompt is
+`prompts/base_translation.txt`, a Jinja chat
 template with Gemma turn markers and structured `source_lang_code` and
 `target_lang_code` fields. It replaces the model's bundled instruction text;
 use `--prompt` to choose another template. The default model is the shared
@@ -21,8 +22,7 @@ python -u scripts/translate_tsv.py \
   --input data/domain.en-fr.tsv \
   --source-language en --target-language fr \
   --model /lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it \
-  --output data/domain.student.jsonl.gz \
-  --references-output data/domain.references.jsonl.gz
+  --output data/domain.student.jsonl.gz
 ```
 
 Use the actual local model directory on Jean Zay, or a Hugging Face model ID
@@ -49,21 +49,22 @@ the model's supported context length.
 Outputs use gzip JSONL, compatible with the post-editor:
 
 ```json
-{"language":"en","seg":"Hello.","tgts":[{"language":"fr","seg":"Bonjour."}]}
+{"language":"en","seg":"Hello.","tgts":[{"language":"fr","seg":"Bonjour.","human_reference":"Salut."}]}
 ```
 
-If omitted, `--references-output` defaults to `OUTPUT.references.jsonl.gz`.
+The target's `seg` contains the generated translation; `human_reference` contains
+the original second TSV column. The post-editor automatically reads the embedded
+reference. Use `--references-output` only if you also want a separate reference file.
 The script writes `OUTPUT.audit.jsonl` after each successful batch and records
 input hashes, prompt contents, and model/settings in `OUTPUT.manifest.json`. Existing outputs
 require `--resume`; resuming requires the same input, script, model, and options.
 Pin `--revision` for a Hub model, or keep local model snapshots immutable.
 
-Feed the aligned files to the correction job:
+Feed the self-contained file to the correction job:
 
 ```bash
 sbatch scripts/post_edit_translations.slurm \
   --synthetic data/domain.student.jsonl.gz \
-  --references data/domain.references.jsonl.gz \
   --output data/domain.corrected.jsonl.gz
 ```
 
@@ -87,8 +88,7 @@ for a pilot so its outputs do not conflict with the full run:
 
 ```bash
 sbatch scripts/translate_tsv.slurm --limit 100 \
-  --output data/roche.pilot.transgemma12b.jsonl.gz \
-  --references-output data/roche.pilot.references.jsonl.gz
+  --output data/roche.pilot.transgemma12b.jsonl.gz
 ```
 
 Resume a full run with `sbatch scripts/translate_tsv.slurm --resume`. Logs are

@@ -79,7 +79,7 @@ def targets(row):
     return result
 
 
-def load_pairs(synthetic, references=None, limit=None):
+def load_pairs(synthetic, references=None, limit=None, use_embedded_reference=True):
     student_rows = records(synthetic)
     reference_rows = records(references) if references else None
     pairs = zip_longest(student_rows, reference_rows) if references else ((r, None) for r in student_rows)
@@ -89,6 +89,14 @@ def load_pairs(synthetic, references=None, limit=None):
             if student is None or (references and reference is None):
                 raise ValueError("input record counts differ")
             student_targets = targets(student)
+            if references is None and use_embedded_reference:
+                embedded = [target.get("human_reference") for target in student["tgts"]]
+                if any("human_reference" in target for target in student["tgts"]):
+                    if any(not isinstance(text, str) or not text.strip() for text in embedded):
+                        raise ValueError("missing or empty embedded human reference")
+                    reference = {"language": student["language"], "seg": student["seg"],
+                                 "tgts": [{"language": target["language"], "seg": text}
+                                          for target, text in zip(student["tgts"], embedded)]}
             if reference is not None:
                 reference_targets = targets(reference)
                 if (student["language"], student["seg"]) != (reference["language"], reference["seg"]):
@@ -317,7 +325,8 @@ def run(args, pairs, prompt):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--synthetic", type=Path, default=ROOT / "data/transgemma.10_data.jsonl.gz")
-    parser.add_argument("--references", type=Path, default=ROOT / "data/bitext.10_data.jsonl.gz")
+    parser.add_argument("--references", type=Path,
+                        help="separate reference file; otherwise read embedded human_reference fields")
     parser.add_argument("--no-reference", action="store_true", help="use source and student only")
     parser.add_argument("--output", type=Path, default=ROOT / "data/postedited.10_data.jsonl.gz")
     parser.add_argument("--prompt", type=Path, default=ROOT / "prompts/minimal_post_edit.txt")
@@ -336,6 +345,8 @@ def parse_args():
     args = parser.parse_args()
     if args.no_reference:
         args.references = None
+    elif args.references is None and args.synthetic.resolve() == (ROOT / "data/transgemma.10_data.jsonl.gz").resolve():
+        args.references = ROOT / "data/bitext.10_data.jsonl.gz"
     if any(n <= 0 for n in (args.tensor_parallel_size, args.batch_size, args.max_model_len, args.max_new_tokens)):
         parser.error("GPU, batch, and token counts must be positive")
     if args.limit is not None and args.limit <= 0:
@@ -355,7 +366,11 @@ def main():
         prompt = args.prompt.read_text(encoding="utf-8").strip()
         if not prompt:
             raise ValueError("empty system prompt")
-        pairs = load_pairs(args.synthetic, args.references, args.limit)
+        pairs = load_pairs(args.synthetic, args.references, args.limit,
+                           use_embedded_reference=not args.no_reference)
+        if not args.no_reference and any(reference is None for _, reference in pairs):
+            raise ValueError("human references are required; embed human_reference in each target "
+                             "or supply --references")
         print(f"Validated {len(pairs):,} selected source lines", flush=True)
         if args.dry_run:
             student, reference = pairs[0]

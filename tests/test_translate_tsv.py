@@ -55,6 +55,7 @@ class TranslationTests(unittest.TestCase):
         self.assertEqual(tokenizer.messages, translation_messages('"Hello."', "en", "fr"))
         self.assertNotIn("Bonjour", json.dumps(tokenizer.messages))
         self.assertEqual(results[0]["record"]["tgts"][0]["seg"], "Salut.")
+        self.assertEqual(results[0]["record"]["tgts"][0]["human_reference"], "Bonjour.")
         self.assertEqual(rows[0]["tgts"][0]["seg"], "Bonjour.")
 
     def test_truncation_empty_and_context_overflow_are_rejected(self):
@@ -87,14 +88,35 @@ class TranslationTests(unittest.TestCase):
         pairs = load_pairs(self.args.output, self.args.references_output)
         self.assertEqual(len(pairs), 2)
         self.assertEqual(pairs[0][1]["tgts"][0]["seg"], "Bonjour.")
+        embedded_pairs = load_pairs(self.args.output)
+        self.assertEqual(embedded_pairs[0][1]["tgts"][0]["seg"], "Bonjour.")
+        no_reference_pairs = load_pairs(self.args.output, use_embedded_reference=False)
+        self.assertIsNone(no_reference_pairs[0][1])
         with self.assertRaisesRegex(ValueError, "exists"):
             run(self.args, rows)
         self.args.resume = True
         # Complete checkpoints can re-export without importing/loading vLLM.
         run(self.args, rows)
+        self.args.resume = False
+        self.args.output = self.root / "self-contained.jsonl.gz"
+        self.args.references_output = None
+        with patch.dict(sys.modules, {"vllm": fake}):
+            run(self.args, rows)
+        self.assertEqual(len(load_pairs(self.args.output)), 2)
+        self.assertFalse(Path(str(self.args.output) + ".references.jsonl.gz").exists())
+        self.args.resume = True
         self.input.write_text("Changed.\tBonjour.\n")
         with self.assertRaisesRegex(ValueError, "differs"):
             run(self.args, rows)
+
+    def test_incomplete_embedded_reference_is_rejected(self):
+        path = self.root / "bad.jsonl.gz"
+        record = {"language": "en", "seg": "Hello.", "tgts": [
+            {"language": "fr", "seg": "Bonjour.", "human_reference": ""}]}
+        with gzip.open(path, "wt", encoding="utf-8") as stream:
+            stream.write(json.dumps(record) + "\n")
+        with self.assertRaisesRegex(ValueError, "empty embedded"):
+            load_pairs(path)
 
 
 if __name__ == "__main__":

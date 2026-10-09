@@ -47,5 +47,4 @@ srun python -u scripts/translate_tsv.py \
   --tensor-parallel-size 1 \
   --batch-size 32 \
   --output data/roche.random.10K.transgemma12b.jsonl.gz \
-  --references-output data/roche.random.10K.references.jsonl.gz \
   "$@"

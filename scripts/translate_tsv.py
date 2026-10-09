@@ -78,6 +78,7 @@ def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
         if not isinstance(answer.text, str) or not answer.text.strip():
             raise ValueError(f"input row {line}: empty model translation")
         record = deepcopy(reference)
+        record["tgts"][0]["human_reference"] = reference["tgts"][0]["seg"]
         record["tgts"][0]["seg"] = answer.text
         entries.append({"line": line, "record": record})
     return entries
@@ -85,13 +86,13 @@ def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
 
 def run(args, references):
     output = args.output.resolve()
-    reference_output = (args.references_output or Path(str(output) + ".references.jsonl.gz")).resolve()
+    reference_output = args.references_output.resolve() if args.references_output else None
     audit = Path(str(output) + ".audit.jsonl")
     manifest = Path(str(output) + ".manifest.json")
-    paths = (output, reference_output, audit, manifest)
+    paths = tuple(path for path in (output, reference_output, audit, manifest) if path is not None)
     if len(set(paths)) != len(paths) or args.input.resolve() in paths:
         raise ValueError("input, outputs, and checkpoint paths must be distinct")
-    config = {"format_version": 1, "input_sha256": digest(args.input),
+    config = {"format_version": 2, "input_sha256": digest(args.input),
               "script_sha256": digest(Path(__file__)), "model": args.model,
               "revision": args.revision, "source_language": args.source_language,
               "target_language": args.target_language, "skip_header": args.skip_header,
@@ -99,14 +100,15 @@ def run(args, references):
               "max_model_len": args.max_model_len, "max_new_tokens": args.max_new_tokens,
               "tensor_parallel_size": args.tensor_parallel_size, "batch_size": args.batch_size,
               "gpu_memory_utilization": args.gpu_memory_utilization,
-              "references_output": str(reference_output), "dtype": "bfloat16"}
+              "references_output": str(reference_output) if reference_output else None, "dtype": "bfloat16"}
     config["prompt"] = args.prompt.read_text(encoding="utf-8")
     if not args.resume and any(path.exists() for path in paths):
         raise ValueError("output/checkpoint exists; use --resume or a new --output")
     if args.resume and not manifest.exists():
         raise ValueError("--resume requires an existing manifest")
     output.parent.mkdir(parents=True, exist_ok=True)
-    reference_output.parent.mkdir(parents=True, exist_ok=True)
+    if reference_output:
+        reference_output.parent.mkdir(parents=True, exist_ok=True)
     with open(audit, "a+b") as stream:
         try:
             fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -116,7 +118,8 @@ def run(args, references):
             if json.loads(manifest.read_text(encoding="utf-8")) != config:
                 raise ValueError("resume configuration or input differs from checkpoint")
         else:
-            if manifest.exists() or output.exists() or reference_output.exists() or stream.tell():
+            if (manifest.exists() or output.exists()
+                    or (reference_output and reference_output.exists()) or stream.tell()):
                 raise ValueError("output/checkpoint was created by another job")
             atomic_json(manifest, config)
         completed = read_checkpoint(stream)
@@ -131,6 +134,8 @@ def run(args, references):
             if (len(targets) != 1 or targets[0].get("language") != args.target_language
                     or not isinstance(targets[0].get("seg"), str) or not targets[0]["seg"].strip()):
                 raise ValueError("invalid checkpoint translation")
+            if targets[0].get("human_reference") != references[index]["tgts"][0]["seg"]:
+                raise ValueError("checkpoint human reference differs from input")
         if len(completed) < len(references):
             from vllm import LLM, SamplingParams
 
@@ -153,15 +158,18 @@ def run(args, references):
                 completed.extend(entries)
                 print(f"Checkpointed {len(completed)}/{len(references)} translations", flush=True)
         export_dataset(output, completed)
-        export_dataset(reference_output, [{"record": reference} for reference in references])
-    print(f"Student translations: {output}\nHuman references: {reference_output}")
+        if reference_output:
+            export_dataset(reference_output, [{"record": reference} for reference in references])
+    print(f"Student translations with human references: {output}")
+    if reference_output:
+        print(f"Separate human references: {reference_output}")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True, help="source<TAB>reference TSV, optionally .gz")
     parser.add_argument("--output", type=Path, required=True, help="student translations, .jsonl.gz or .json.gz")
-    parser.add_argument("--references-output", type=Path, help="default: OUTPUT.references.jsonl.gz")
+    parser.add_argument("--references-output", type=Path, help="optionally export a separate reference file")
     parser.add_argument("--source-language", required=True, help="TranslateGemma language code, e.g. en")
     parser.add_argument("--target-language", required=True, help="TranslateGemma language code, e.g. fr")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="HF model ID or local directory")
