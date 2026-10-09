@@ -197,28 +197,23 @@ checks alignment throughout both files.
   literal edit spans, brief reasons, raw JSON responses, and computed large-edit flags.
 - `*.manifest.json`: input hashes, prompt, script hash, and run settings.
 - `*.stats.json`: changed/unchanged counts, percentages, and large-edit counts.
-- `*.failure.json`: rejected teacher response and source line, if inference
-  stops on a validation failure. This diagnostic is never used as training data.
 
 The output dataset is exported atomically after all selected rows finish.
 Interrupted jobs resume from the audit checkpoint; only an incomplete final
 journal line is discarded. Existing outputs are not overwritten without
 `--resume`. A completed resume can re-export without loading a GPU model.
 
-JSON-constrained decoding and local checks reject malformed, empty, truncated,
-or inconsistent teacher outputs. A failed batch stops the run before committing
-that batch, instead of silently using a reference or student fallback. Increase
-token/context budgets for truncation, or inspect the prompt/model for invalid
-edits. Changed generation settings require a new output path.
-
-If the teacher reports no edits and differs only in leading/trailing whitespace,
-the original translation is restored exactly. This counts as unchanged; internal
-whitespace, casing, and punctuation differences still require declared edits.
-
-Inconsistent teacher JSON is retried for the affected translation only, with
-validation feedback, up to `--validation-retries` times (default 2). Successful
-retries retain rejected responses and diagnostics in the audit. Final validation
-remains strict: exhausted retries stop the batch without exporting invalid data.
+Generation uses JSON-constrained decoding but does not validate teacher output,
+check edit descriptions, retry responses, or stop because of malformed or
+truncated responses. Every raw response and finish reason is checkpointed.
+The returned translation is exported as-is, including empty strings; if no string
+`corrected_translation` can be extracted, the output's `corrected` is null and
+the audit includes an `extraction_error`. No base/reference fallback is substituted.
+Statistics report missing translations and non-stop responses separately.
+Quality validation and filtering belong after generation, before training.
+Input alignment, context budgets, checkpoint integrity, and engine response counts
+are still checked to prevent misalignment or silent input truncation.
+Changed script or generation settings require a new output path.
 
 Edits above `--review-edit-fraction` (default 0.30) are flagged, not clipped or
 automatically rejected. The fraction is punctuation-sensitive token changes

@@ -137,7 +137,7 @@ class PostEditTests(unittest.TestCase):
                 self.assertEqual(result["edits"], [])
         result = generate_batch(FakeLLM([answer("Bonjour.")]), FakeTokenizer(), None,
                                 [(row(target="Bonjour.\n"), row())], "prompt", self.args)[0]
-        self.assertEqual(result["record"]["tgts"][0]["corrected"], "Bonjour.\n")
+        self.assertEqual(result["record"]["tgts"][0]["corrected"], "Bonjour.")
         self.assertEqual(result["targets"][0]["edit_fraction"], 0)
 
     def test_no_edit_internal_whitespace_or_casing_changes_rejected(self):
@@ -148,7 +148,7 @@ class PostEditTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "disagree"):
                     validate_result(json.dumps(answer(returned)), original)
 
-    def test_validation_retry_repairs_unapplied_edit_and_keeps_audit(self):
+    def test_inconsistent_edits_saved_without_validation_or_retry(self):
         student = row(target="La carte pour le patient contient les messages clés.")
         corrected = "La carte patient contient les messages clés."
         actual = {"before": "carte pour le patient", "after": "carte patient",
@@ -162,26 +162,36 @@ class PostEditTests(unittest.TestCase):
             return FakeLLM([sequence.pop(0)]).generate(prompts, sampling)
         result = generate_batch(SimpleNamespace(generate=generate), FakeTokenizer(), None,
                                 [(student, row())], "prompt", self.args)[0]
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
         self.assertEqual(result["record"]["tgts"][0]["corrected"], corrected)
-        self.assertEqual(result["targets"][0]["edits"], [actual])
-        self.assertEqual(len(result["targets"][0]["validation_retries"]), 1)
+        self.assertEqual(result["targets"][0]["edits"], [actual, unapplied])
+        self.assertNotIn("validation_retries", result["targets"][0])
 
-    def test_validation_retry_limit_remains_strict(self):
-        self.args.validation_retries = 1
+    def test_unexplained_change_saved_without_retry(self):
         calls = []
         def generate(prompts, sampling, **kwargs):
             calls.append(prompts)
             return FakeLLM([answer("Unexplained change.")]).generate(prompts, sampling)
-        with self.assertRaisesRegex(ValueError, "disagree"):
-            generate_batch(SimpleNamespace(generate=generate), FakeTokenizer(), None,
-                           [(row(), row())], "prompt", self.args)
-        self.assertEqual(len(calls), 2)
+        result = generate_batch(SimpleNamespace(generate=generate), FakeTokenizer(), None,
+                                [(row(), row())], "prompt", self.args)[0]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(result["record"]["tgts"][0]["corrected"], "Unexplained change.")
 
-    def test_truncation_rejected(self):
-        with self.assertRaisesRegex(ValueError, "finish normally"):
-            generate_batch(FakeLLM([answer()], "length"), FakeTokenizer(), None,
-                           [(row(), row())], "prompt", self.args)
+    def test_truncation_recorded_without_stopping(self):
+        result = generate_batch(FakeLLM([answer()], "length"), FakeTokenizer(), None,
+                                [(row(), row())], "prompt", self.args)[0]
+        self.assertEqual(result["targets"][0]["finish_reason"], "length")
+
+    def test_malformed_response_is_saved_and_later_rows_continue(self):
+        outputs = [SimpleNamespace(outputs=[SimpleNamespace(text="{broken", finish_reason="length")]),
+                   SimpleNamespace(outputs=[SimpleNamespace(text=json.dumps(answer()), finish_reason="stop")])]
+        llm = SimpleNamespace(generate=lambda *args, **kwargs: outputs)
+        results = generate_batch(llm, FakeTokenizer(), None,
+                                 [(row(), row()), (row(), row())], "prompt", self.args)
+        self.assertIsNone(results[0]["record"]["tgts"][0]["corrected"])
+        self.assertEqual(results[0]["targets"][0]["raw_response"], "{broken")
+        self.assertIsNotNone(results[0]["targets"][0]["extraction_error"])
+        self.assertEqual(results[1]["record"]["tgts"][0]["corrected"], "Bonjour.")
 
     def test_context_not_silently_truncated(self):
         self.args.max_model_len = 1025
@@ -263,7 +273,7 @@ class PostEditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "differs"):
             run(self.args, pairs, "changed prompt")
 
-    def test_failure_response_does_not_enter_training_output(self):
+    def test_inconsistent_response_is_exported_without_stopping(self):
         self.args.synthetic = self.write_rows("synthetic.gz", [row()])
         self.args.references = None
         self.args.output = self.directory / "failed.jsonl.gz"
@@ -280,12 +290,11 @@ class PostEditTests(unittest.TestCase):
         modules = {"vllm": SimpleNamespace(LLM=lambda **kw: llm, SamplingParams=lambda **kw: kw),
                    "vllm.sampling_params": SimpleNamespace(StructuredOutputsParams=lambda **kw: kw)}
         with patch.dict("sys.modules", modules):
-            with self.assertRaisesRegex(ValueError, "response saved"):
-                run(self.args, load_pairs(self.args.synthetic), "prompt")
-        self.assertFalse(self.args.output.exists())
-        failure = json.loads(Path(str(self.args.output) + ".failure.json").read_text())
-        self.assertEqual(failure["line"], 1)
-        self.assertIn("Unexplained change", failure["raw_response"])
+            run(self.args, load_pairs(self.args.synthetic), "prompt")
+        self.assertEqual(list(records(self.args.output))[0]["tgts"][0]["corrected"],
+                         "Unexplained change.")
+        audit = json.loads(Path(str(self.args.output) + ".audit.jsonl").read_text())
+        self.assertIn("Unexplained change", audit["targets"][0]["raw_response"])
 
 
 if __name__ == "__main__":

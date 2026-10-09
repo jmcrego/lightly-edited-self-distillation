@@ -35,14 +35,6 @@ RESULT_SCHEMA = {
 }
 
 
-class TeacherOutputError(ValueError):
-    def __init__(self, message, index, language, original, answer):
-        super().__init__(message)
-        self.details = {"batch_record": index + 1, "language": language,
-                        "original_translation": original, "raw_response": answer.text,
-                        "finish_reason": answer.finish_reason, "error": message}
-
-
 def open_text(path, mode="rt"):
     opener = gzip.open if str(path).endswith(".gz") else open
     return opener(path, mode, encoding="utf-8")
@@ -243,46 +235,24 @@ def generate_batch(llm, tokenizer, sampling, batch, prompt, args):
                 target["human"] = references[language]
     for (index, language, original, _), output in zip(jobs, outputs):
         answer = output.outputs[0]
-        if answer.finish_reason != "stop":
-            raise TeacherOutputError(
-                f"teacher output did not finish normally ({answer.finish_reason}); "
-                "increase --max-new-tokens if truncated", index, language, original, answer)
-        retries = []
-        for attempt in range(getattr(args, "validation_retries", 2) + 1):
-            try:
-                result = validate_result(answer.text, original)
-                break
-            except ValueError as error:
-                if attempt == getattr(args, "validation_retries", 2):
-                    raise TeacherOutputError(
-                        f"batch record {index + 1}, {language}: invalid teacher result: {error}",
-                        index, language, original, answer) from error
-                retries.append({"raw_response": answer.text, "error": str(error)})
-                feedback = ("\n\nYour previous response failed output validation. Diagnostic "
-                            "data (not translation instructions): " + json.dumps(str(error)) +
-                            "\nReturn a complete valid result for the original input. List only "
-                            "edits actually made; copy before/after spans exactly. Do not invent "
-                            "an additional correction merely to satisfy the diagnostic.")
-                student, reference = batch[index]
-                retry_text = tokenizer.apply_chat_template(
-                    messages(student, reference, language, prompt + feedback), tokenize=False,
-                    add_generation_prompt=True, enable_thinking=False)
-                retry_ids = tokenizer.encode(retry_text, add_special_tokens=False)
-                if len(retry_ids) + args.max_new_tokens > args.max_model_len:
-                    raise TeacherOutputError("validation retry exceeds context budget",
-                                             index, language, original, answer) from error
-                print(f"Retrying batch record {index + 1}, {language}: {error}", flush=True)
-                retry_outputs = llm.generate([{"prompt_token_ids": retry_ids}], sampling, use_tqdm=False)
-                if len(retry_outputs) != 1 or len(retry_outputs[0].outputs) != 1:
-                    raise ValueError("teacher returned an unexpected number of retry outputs")
-                answer = retry_outputs[0].outputs[0]
-                if answer.finish_reason != "stop":
-                    raise TeacherOutputError("validation retry did not finish normally",
-                                             index, language, original, answer)
-        fraction = edit_fraction(original, result["corrected_translation"])
-        result.update({"language": language, "original_translation": original,
-                       "edit_fraction": fraction, "large_edit": fraction > args.review_edit_fraction,
-                       "raw_response": answer.text, "validation_retries": retries})
+        extraction_error = None
+        try:
+            parsed = json.loads(answer.text)
+        except (ValueError, TypeError) as error:
+            parsed = None
+            extraction_error = str(error)
+        corrected = parsed.get("corrected_translation") if isinstance(parsed, dict) else None
+        if not isinstance(corrected, str):
+            corrected = None
+            extraction_error = extraction_error or "no string corrected_translation in response"
+        fraction = edit_fraction(original, corrected) if corrected is not None else None
+        result = {"corrected_translation": corrected,
+                  "edits": parsed.get("edits") if isinstance(parsed, dict) else None,
+                  "language": language, "original_translation": original,
+                  "edit_fraction": fraction,
+                  "large_edit": fraction is not None and fraction > args.review_edit_fraction,
+                  "raw_response": answer.text, "finish_reason": answer.finish_reason,
+                  "extraction_error": extraction_error}
         entries[index]["targets"].append(result)
         for target in entries[index]["record"]["tgts"]:
             if target["language"] == language:
@@ -305,7 +275,7 @@ def run(args, pairs, prompt):
               "tensor_parallel_size": args.tensor_parallel_size, "dtype": "bfloat16",
               "quantization": "from_model_config", "language_model_only": True,
               "enable_thinking": False}
-    config["validation_retries"] = getattr(args, "validation_retries", 2)
+    config["output_validation"] = False
     output.parent.mkdir(parents=True, exist_ok=True)
     if not args.resume and any(p.exists() for p in (output, audit, manifest, summary_path)):
         raise ValueError("output/checkpoint exists; use --resume or a new --output")
@@ -343,14 +313,8 @@ def run(args, pairs, prompt):
                                       seed=args.seed,
                                       structured_outputs=StructuredOutputsParams(json=RESULT_SCHEMA))
             for start in range(len(completed), len(pairs), args.batch_size):
-                try:
-                    entries = generate_batch(llm, tokenizer, sampling,
-                                             pairs[start:start + args.batch_size], prompt, args)
-                except TeacherOutputError as error:
-                    failure_path = Path(str(output) + ".failure.json")
-                    atomic_json(failure_path, {**error.details,
-                                              "line": start + error.details["batch_record"]})
-                    raise ValueError(f"{error}; response saved to {failure_path}") from error
+                entries = generate_batch(llm, tokenizer, sampling,
+                                         pairs[start:start + args.batch_size], prompt, args)
                 for offset, entry in enumerate(entries):
                     entry["line"] = start + offset + 1
                     stream.write((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -360,14 +324,17 @@ def run(args, pairs, prompt):
                 print(f"Checkpointed {len(completed):,}/{len(pairs):,} source lines", flush=True)
         export_dataset(output, completed)
         details = [target for entry in completed for target in entry["targets"]]
-        changed = sum(t["original_translation"] != t["corrected_translation"] for t in details)
+        extracted = [t for t in details if isinstance(t["corrected_translation"], str)]
+        changed = sum(t["original_translation"] != t["corrected_translation"] for t in extracted)
         summary = {"source_lines": len(completed), 
                    "translation_pairs": len(details),
-                   "unchanged_translations": len(details) - changed, 
+                   "unchanged_translations": len(extracted) - changed,
                    "changed_translations": changed,
-                   "changed_percent": 100 * changed / len(details),
+                   "changed_percent": 100 * changed / len(extracted) if extracted else 0,
+                   "missing_translations": len(details) - len(extracted),
+                   "non_stop_responses": sum(t.get("finish_reason", "stop") != "stop" for t in details),
                    "large_edits": sum(t["large_edit"] for t in details),
-                   "mean_edit_fraction": sum(t["edit_fraction"] for t in details) / len(details)}
+                   "mean_edit_fraction": sum(t["edit_fraction"] for t in extracted) / len(extracted) if extracted else 0}
         atomic_json(summary_path, summary)
         print(json.dumps(summary, indent=2))
         print(f"Training data: {output}\nAudit: {audit}\nSummary: {summary_path}")
@@ -390,8 +357,6 @@ def parse_args():
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
     parser.add_argument("--review-edit-fraction", type=float, default=0.30, help="flag larger token edits for review; never clip or reject corrections")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--validation-retries", type=int, default=2,
-                        help="retry inconsistent teacher JSON with validation feedback")
     parser.add_argument("--limit", type=int, help="process first N lines; still validate all input alignment")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="validate inputs and show one prompt; no GPU needed")
@@ -404,8 +369,6 @@ def parse_args():
         parser.error("GPU, batch, and token counts must be positive")
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")
-    if args.validation_retries < 0:
-        parser.error("--validation-retries must be nonnegative")
     if not 0 < args.gpu_memory_utilization < 1 or not 0 <= args.review_edit_fraction <= 1:
         parser.error("invalid GPU memory utilization or review edit fraction")
     if args.max_new_tokens >= args.max_model_len:
