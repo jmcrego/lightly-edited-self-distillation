@@ -51,6 +51,38 @@ def translation_messages(source, source_language, target_language):
     }]}]
 
 
+def gemma3_rope_compatibility(config):
+    """Express Gemma3's nested RoPE settings in its equivalent legacy format."""
+    text = config.get_text_config()
+    if getattr(text, "model_type", None) != "gemma3_text":
+        return config
+    parameters = getattr(text, "rope_parameters", None)
+    if not isinstance(parameters, dict) or "full_attention" not in parameters:
+        return config
+    if set(parameters) != {"full_attention", "sliding_attention"}:
+        raise ValueError("unsupported Gemma3 nested RoPE layout")
+    full, sliding = parameters["full_attention"], parameters["sliding_attention"]
+    if (not isinstance(full, dict) or "rope_type" not in full
+            or not isinstance(sliding, dict) or sliding.get("rope_type") != "default"
+            or set(sliding) - {"rope_type", "rope_theta"}):
+        raise ValueError("Gemma3 RoPE compatibility requires default sliding-attention RoPE")
+    full_theta = full.get("rope_theta", getattr(text, "rope_theta", None))
+    local_theta = sliding.get("rope_theta", getattr(text, "rope_local_base_freq", None))
+    if full_theta is None or local_theta is None:
+        raise ValueError("Gemma3 RoPE compatibility requires explicit full/local base frequencies")
+    # Transformers 4 + vLLM 0.18.1 inserts rope_theta at the top of a nested
+    # dictionary and then fails validation. Gemma3's legacy path uses the full
+    # parameters globally and default RoPE + rope_local_base_freq locally.
+    text.rope_parameters = deepcopy(full)
+    text.rope_parameters["rope_theta"] = full_theta
+    text.rope_theta = full_theta
+    text.rope_local_base_freq = local_theta
+    text.rope_scaling = deepcopy(text.rope_parameters)
+    print("Applied Gemma3 RoPE compatibility: "
+          f"full={text.rope_parameters}; sliding=default, theta={local_theta}", flush=True)
+    return config
+
+
 def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
     prompts = []
     for offset, reference in enumerate(batch):
@@ -140,6 +172,7 @@ def run(args, references):
             from vllm import LLM, SamplingParams
 
             llm = LLM(model=args.model, revision=args.revision, tokenizer_revision=args.revision,
+                      hf_overrides=gemma3_rope_compatibility,
                       tensor_parallel_size=args.tensor_parallel_size,
                       distributed_executor_backend="mp", dtype="bfloat16",
                       max_model_len=args.max_model_len, max_num_seqs=args.batch_size,

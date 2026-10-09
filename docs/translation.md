@@ -71,6 +71,23 @@ sbatch scripts/post_edit_translations.slurm \
 TranslateGemma input contract:
 https://huggingface.co/google/translategemma-12b-it#usage
 
+## Gemma3 RoPE compatibility
+
+With vLLM 0.18.1 and Transformers 4.57.6, a nested Gemma3 `rope_parameters`
+dictionary can fail validation with `rope_parameters should have a 'rope_type'
+key`: vLLM's legacy conversion adds `rope_theta` beside the attention-type
+entries, preventing recognition of the nested layout.
+
+The translation script supplies a Gemma3-only runtime config override. It
+retains the full-attention RoPE type, scaling factor, and base frequency, and
+retains default sliding-attention RoPE with the model's local base frequency.
+The shared model files and the Qwen post-editing environment are unchanged.
+Unsupported layouts fail rather than substituting guessed parameters.
+The applied parameters are printed in the job log. This workaround has local
+config tests but still requires verification on the actual GPU node.
+
+Source: https://github.com/vllm-project/vllm/blob/v0.18.1/vllm/transformers_utils/config.py
+
 ## Jean Zay submission
 
 The launcher requests one H100 GPU on one node and activates the existing

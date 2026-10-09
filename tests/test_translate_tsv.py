@@ -8,7 +8,9 @@ import unittest
 from unittest.mock import patch
 
 from scripts.post_edit_translations import load_pairs
-from scripts.translate_tsv import generate_batch, load_tsv, run, translation_messages
+from scripts.translate_tsv import (
+    gemma3_rope_compatibility, generate_batch, load_tsv, run, translation_messages,
+)
 
 
 class Tokenizer:
@@ -18,6 +20,40 @@ class Tokenizer:
 
 
 class TranslationTests(unittest.TestCase):
+    def test_gemma3_rope_preserves_full_scaling_and_local_frequency(self):
+        nested = {"full_attention": {"factor": 8.0, "rope_type": "linear"},
+                  "sliding_attention": {"rope_type": "default"}}
+        text = SimpleNamespace(model_type="gemma3_text", rope_parameters=nested,
+                               rope_theta=1000000, rope_local_base_freq=10000)
+        config = SimpleNamespace(get_text_config=lambda: text)
+        self.assertIs(gemma3_rope_compatibility(config), config)
+        self.assertEqual(text.rope_parameters,
+                         {"factor": 8.0, "rope_type": "linear", "rope_theta": 1000000})
+        self.assertEqual(text.rope_local_base_freq, 10000)
+        self.assertEqual(text.rope_scaling, text.rope_parameters)
+        self.assertEqual(nested["sliding_attention"], {"rope_type": "default"})
+        self.assertNotIn("rope_theta", nested["full_attention"])
+
+    def test_gemma3_rope_respects_per_layer_frequencies_and_rejects_scaled_local_rope(self):
+        text = SimpleNamespace(model_type="gemma3_text", rope_parameters={
+            "full_attention": {"rope_type": "linear", "factor": 8, "rope_theta": 500000},
+            "sliding_attention": {"rope_type": "default", "rope_theta": 20000}},
+            rope_theta=1000000, rope_local_base_freq=10000)
+        config = SimpleNamespace(get_text_config=lambda: text)
+        gemma3_rope_compatibility(config)
+        self.assertEqual(text.rope_theta, 500000)
+        self.assertEqual(text.rope_local_base_freq, 20000)
+        text.rope_parameters = {"full_attention": {"rope_type": "linear", "factor": 8},
+                                "sliding_attention": {"rope_type": "linear", "factor": 2}}
+        with self.assertRaisesRegex(ValueError, "default sliding"):
+            gemma3_rope_compatibility(config)
+
+    def test_other_model_configs_are_unchanged(self):
+        text = SimpleNamespace(model_type="qwen3_5", rope_parameters={"rope_type": "default"})
+        config = SimpleNamespace(get_text_config=lambda: text)
+        self.assertIs(gemma3_rope_compatibility(config), config)
+        self.assertEqual(text.rope_parameters, {"rope_type": "default"})
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
