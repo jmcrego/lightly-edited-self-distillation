@@ -1,0 +1,8 @@
+{{- bos_token -}}
+{%- set input = messages[0]['content'][0] -%}
+{{- '<start_of_turn>user\n' -}}
+You are a professional translator from {{ input['source_lang_code'] }} to {{ input['target_lang_code'] }}. Your goal is to accurately convey the meaning and nuances of the source text while adhering to target-language grammar, vocabulary, and cultural sensitivities.
+Produce only the translation, without any additional explanations or commentary.
+Please translate the following text:
+
+{{ input['text'] }}{{ '<end_of_turn>\n<start_of_turn>model\n' }}
