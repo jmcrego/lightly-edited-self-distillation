@@ -60,29 +60,39 @@ export OMP_NUM_THREADS=8
 # Experiment settings. Input files must already use src/tgt[/reject], not tgts.
 METHOD=sft
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
-TRAIN=data/roche.10K.postedited122b.full.shuf.trn.jsonl.train.seg-corrected.jsonl
-DEV=data/roche.10K.postedited122b.full.shuf.dev.jsonl.train.seg-corrected.jsonl
-TEST=""  # Optional: set a path to enable final test evaluation.
 PROMPT=prompts/base_translation.txt
+
+### exp 1
+TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected.jsonl
+DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
+TEST=""
 OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
 
-srun --gres=gpu:1 python -u - <<'PY'
-import torch
-import transformers
-import trl
-import peft
-import datasets
-import sacrebleu
+### exp 2
+TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-human.jsonl
+DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-human.jsonl
+TEST=""
+OUTPUT="training/${METHOD}-seg-human-${SLURM_JOB_ID}"
 
-print("PyTorch:", torch.__version__, "CUDA:", torch.version.cuda, flush=True)
-print("Transformers:", transformers.__version__, "TRL:", trl.__version__,
-      "PEFT:", peft.__version__, flush=True)
-torch.cuda.init()
-if torch.cuda.device_count() != 1:
-    raise RuntimeError("Expected exactly one visible GPU")
-probe = torch.empty(1, device="cuda:0")
-print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
-PY
+
+
+# srun --gres=gpu:1 python -u - <<'PY'
+# import torch
+# import transformers
+# import trl
+# import peft
+# import datasets
+# import sacrebleu
+
+# print("PyTorch:", torch.__version__, "CUDA:", torch.version.cuda, flush=True)
+# print("Transformers:", transformers.__version__, "TRL:", trl.__version__,
+#       "PEFT:", peft.__version__, flush=True)
+# torch.cuda.init()
+# if torch.cuda.device_count() != 1:
+#     raise RuntimeError("Expected exactly one visible GPU")
+# probe = torch.empty(1, device="cuda:0")
+# print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
+# PY
 
 TEST_ARGS=()
 if [[ -n "$TEST" ]]; then
