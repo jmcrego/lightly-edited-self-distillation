@@ -64,7 +64,7 @@ TRAIN=data/roche.10K.postedited122b.full.shuf.trn.jsonl.train.seg-corrected.json
 DEV=data/roche.10K.postedited122b.full.shuf.dev.jsonl.train.seg-corrected.jsonl
 TEST=""  # Optional: set a path to enable final test evaluation.
 PROMPT=prompts/base_translation.txt
-OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
+OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
 
 srun --gres=gpu:1 python -u - <<'PY'
 import torch
