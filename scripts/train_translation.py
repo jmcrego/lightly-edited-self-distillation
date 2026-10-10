@@ -263,7 +263,7 @@ def run(args):
                 model.save_pretrained(args.output / "best-adapter")
                 write_json(args.output / "best.json", {"step": step, **scores})
 
-        def on_step_end(self, state, control, **kwargs):
+        def on_step_end(self, training_args, state, control, **kwargs):
             if state.global_step % args.eval_steps == 0:
                 self.score(state.global_step)
             return control

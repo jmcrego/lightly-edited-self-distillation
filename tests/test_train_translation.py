@@ -1,3 +1,4 @@
+import ast
 import gzip
 import json
 from pathlib import Path
@@ -6,6 +7,7 @@ from types import SimpleNamespace
 import unittest
 
 from scripts.train_translation import parse_args, prepare_eval, prepare_training
+from scripts import train_translation
 
 
 class Tokenizer:
@@ -23,6 +25,22 @@ class Tokenizer:
 
 
 class TrainingTests(unittest.TestCase):
+    def test_callback_accepts_transformers_positional_arguments(self):
+        # Exercise the callback without importing the CUDA training stack.
+        tree = ast.parse(Path(train_translation.__file__).read_text())
+        method = next(node for node in ast.walk(tree)
+                      if isinstance(node, ast.FunctionDef) and node.name == "on_step_end")
+        namespace = {"args": SimpleNamespace(eval_steps=100)}
+        exec(compile(ast.Module(body=[method], type_ignores=[]), "callback", "exec"), namespace)
+        calls = []
+        callback = SimpleNamespace(score=calls.append)
+        control = object()
+        for step in (1, 100):
+            result = namespace["on_step_end"](callback, SimpleNamespace(),
+                SimpleNamespace(global_step=step), control, model=object())
+            self.assertIs(result, control)
+        self.assertEqual(calls, [100])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
