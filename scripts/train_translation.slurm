@@ -67,12 +67,14 @@ PROMPT=prompts/base_translation.txt
 # DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
 # TEST=""
 # OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
+# METHOD="sft"
 
 ### exp 2
 # TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-human.jsonl
 # DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-human.jsonl
 # TEST=""
 # OUTPUT="training/${METHOD}-seg-human-${SLURM_JOB_ID}"
+# METHOD="sft"
 
 ### exp 3
 TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected-base.jsonl
