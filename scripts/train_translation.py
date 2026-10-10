@@ -17,6 +17,7 @@ wrapper. Reload them against that same text-only base model.
 """
 
 import argparse
+from collections import Counter
 from contextlib import nullcontext
 import gzip
 import json
@@ -228,12 +229,17 @@ def run(args):
         tokenizer.pad_token = tokenizer.eos_token
     args.stop_ids = list({tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<end_of_turn>")})
     training, excluded = prepare_training(args.train, tokenizer, prompt, args)
+    write_json(args.output / "excluded.json", {"train": excluded})
+    reasons = dict(Counter(row["reason"] for row in excluded))
+    print(f"Retained {len(training)} training samples; excluded {len(excluded)}: {reasons}", flush=True)
     if not training:
-        raise ValueError("no training samples survived filtering")
+        fields = "src/tgt" if args.method == "sft" else "src/tgt/reject"
+        raise ValueError(f"no training samples survived filtering ({reasons}); expected {fields} fields. "
+                         "Convert seg/tgts postediting records with scripts/prepare_dataset.py. "
+                         f"See {args.output / 'excluded.json'}")
     dev, dev_excluded = prepare_eval(args.dev, tokenizer, prompt, args)
     test, test_excluded = prepare_eval(args.test, tokenizer, prompt, args) if args.test else ([], [])
     write_json(args.output / "excluded.json", {"train": excluded, "dev": dev_excluded, "test": test_excluded})
-    print(f"Retained {len(training)} training samples; excluded {len(excluded)}", flush=True)
     model = get_peft_model(load_model(args), LoraConfig(
         task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout, target_modules=args.lora_targets.split(",")))

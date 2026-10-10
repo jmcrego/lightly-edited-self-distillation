@@ -60,8 +60,8 @@ export OMP_NUM_THREADS=8
 # Experiment settings. Input files must already use src/tgt[/reject], not tgts.
 METHOD=sft
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
-TRAIN=data/roche.10K.postedited122b.full.shuf.trn.jsonl
-DEV=data/roche.10K.postedited122b.full.shuf.dev.jsonl
+TRAIN=data/roche.10K.postedited122b.full.shuf.trn.jsonl.train.seg-corrected.jsonl
+DEV=data/roche.10K.postedited122b.full.shuf.dev.jsonl.train.seg-corrected.jsonl
 TEST=""  # Optional: set a path to enable final test evaluation.
 PROMPT=prompts/base_translation.txt
 OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
