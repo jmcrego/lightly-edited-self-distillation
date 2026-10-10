@@ -5,8 +5,13 @@ Install in a separate CUDA training environment:
   pip install 'transformers==4.57.6' 'trl==0.19.1' 'peft==0.17.1' \
     'accelerate>=1.4,<2' 'datasets>=3,<4' 'sacrebleu>=2.5,<3' sentencepiece
 PyTorch must be a CUDA build. Check --help for all experiment settings.
-SFT JSONL: src/tgt; DPO JSONL: src/chosen/rejected; dev/test: src<TAB>tgt.
-Files may be gzip compressed. Run once per target variant/LR/batch setting.
+Train/dev/test accept .json (object or array), .jsonl, or .tsv, optionally .gz.
+SFT: src/tgt fields or src<TAB>tgt columns.
+DPO training: src/tgt/reject fields or src<TAB>tgt<TAB>reject columns;
+tgt is chosen and reject is rejected. Dev/test use src/tgt for BLEU/chrF;
+an additional DPO reject field/column is accepted but unused for decoding.
+All options apply to both methods unless marked DPO-only. There are no
+SFT-only options. Run once per target variant/LR/batch setting.
 Adapters use the text-only model returned by load_model(), not the multimodal
 wrapper. Reload them against that same text-only base model.
 """
@@ -31,6 +36,42 @@ def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def read_examples(path, fields, optional_reject=False):
+    suffix = path.with_suffix("").suffix if path.suffix == ".gz" else path.suffix
+    if suffix not in {".json", ".jsonl", ".tsv"}:
+        raise ValueError(f"{path}: expected .json, .jsonl, or .tsv (optionally .gz)")
+    with open_text(path) as stream:
+        if suffix == ".json":
+            try:
+                values = json.load(stream)
+            except json.JSONDecodeError:
+                # Also accept line-delimited objects with a .json suffix.
+                stream.seek(0)
+            else:
+                values = values if isinstance(values, list) else [values]
+                for index, value in enumerate(values, 1):
+                    if not isinstance(value, dict):
+                        raise ValueError(f"{path}:record {index}: expected a JSON object")
+                    yield index, value
+                return
+        for line, text in enumerate(stream, 1):
+            if suffix == ".tsv":
+                parts = text.rstrip("\r\n").split("\t")
+                columns = fields + ["reject"] if optional_reject and len(parts) == len(fields) + 1 else fields
+                if len(parts) != len(columns):
+                    expected = "<TAB>".join(fields)
+                    raise ValueError(f"{path}:{line}: expected {expected}")
+                value = dict(zip(columns, parts))
+            else:
+                try:
+                    value = json.loads(text)
+                except json.JSONDecodeError as error:
+                    raise ValueError(f"{path}:{line}: invalid JSON: {error}") from error
+                if not isinstance(value, dict):
+                    raise ValueError(f"{path}:{line}: expected a JSON object")
+            yield line, value
+
+
 def prompt_ids(tokenizer, prompt, source, args):
     messages = [{"role": "user", "content": [{"type": "text", "text": source,
                  "source_lang_code": args.source_language, "target_lang_code": args.target_language}]}]
@@ -48,44 +89,38 @@ def completion_ids(tokenizer, text):
 
 def prepare_training(path, tokenizer, prompt, args):
     rows, excluded = [], []
-    fields = ["src", "tgt"] if args.method == "sft" else ["src", "chosen", "rejected"]
-    with open_text(path) as stream:
-        for line, text in enumerate(stream, 1):
-            value = json.loads(text)
-            if not isinstance(value, dict):
-                raise ValueError(f"{path}:{line}: expected a JSON object")
-            if any(not isinstance(value.get(k), str) or not value[k].strip() for k in fields):
-                excluded.append({"line": line, "reason": "missing_or_empty_field"})
-                continue
-            prefix = prompt_ids(tokenizer, prompt, value["src"], args)
-            endings = [completion_ids(tokenizer, value[k]) for k in fields[1:]]
-            if any(len(prefix) + len(end) > args.max_length for end in endings):
-                excluded.append({"line": line, "reason": "max_length"})
-                continue
-            if args.method == "sft":
-                ids = prefix + endings[0]
-                rows.append({"input_ids": ids, "attention_mask": [1] * len(ids),
-                             "labels": [-100] * len(prefix) + endings[0]})
-            elif endings[0] == endings[1]:
-                excluded.append({"line": line, "reason": "identical_preferences"})
-            else:
-                rows.append({"prompt_input_ids": prefix, "chosen_input_ids": endings[0],
-                             "rejected_input_ids": endings[1]})
+    fields = ["src", "tgt"] if args.method == "sft" else ["src", "tgt", "reject"]
+    for line, value in read_examples(path, fields):
+        if any(not isinstance(value.get(k), str) or not value[k].strip() for k in fields):
+            excluded.append({"line": line, "reason": "missing_or_empty_field"})
+            continue
+        prefix = prompt_ids(tokenizer, prompt, value["src"], args)
+        endings = [completion_ids(tokenizer, value[k]) for k in fields[1:]]
+        if any(len(prefix) + len(end) > args.max_length for end in endings):
+            excluded.append({"line": line, "reason": "max_length"})
+            continue
+        if args.method == "sft":
+            ids = prefix + endings[0]
+            rows.append({"input_ids": ids, "attention_mask": [1] * len(ids),
+                         "labels": [-100] * len(prefix) + endings[0]})
+        elif endings[0] == endings[1]:
+            excluded.append({"line": line, "reason": "identical_preferences"})
+        else:
+            rows.append({"prompt_input_ids": prefix, "chosen_input_ids": endings[0],
+                         "rejected_input_ids": endings[1]})
     return rows, excluded
 
 
 def prepare_eval(path, tokenizer, prompt, args):
     rows, excluded = [], []
-    with open_text(path) as stream:
-        for line, text in enumerate(stream, 1):
-            parts = text.rstrip("\r\n").split("\t")
-            if len(parts) != 2 or not all(part.strip() for part in parts):
-                raise ValueError(f"{path}:{line}: expected nonempty source<TAB>reference")
-            ids = prompt_ids(tokenizer, prompt, parts[0], args)
-            if len(ids) + args.max_new_tokens > args.max_length:
-                excluded.append({"line": line, "reason": "generation_context_budget"})
-            else:
-                rows.append({"line": line, "src": parts[0], "tgt": parts[1], "input_ids": ids})
+    for line, value in read_examples(path, ["src", "tgt"], optional_reject=args.method == "dpo"):
+        if any(not isinstance(value.get(k), str) or not value[k].strip() for k in ("src", "tgt")):
+            raise ValueError(f"{path}:{line}: expected nonempty src/tgt fields")
+        ids = prompt_ids(tokenizer, prompt, value["src"], args)
+        if len(ids) + args.max_new_tokens > args.max_length:
+            excluded.append({"line": line, "reason": "generation_context_budget"})
+        else:
+            rows.append({"line": line, "src": value["src"], "tgt": value["tgt"], "input_ids": ids})
     if not rows:
         raise ValueError(f"{path}: no evaluation rows fit the generation budget")
     return rows, excluded
@@ -231,7 +266,7 @@ def run(args):
     common = dict(output_dir=str(args.output / "checkpoints"),
         per_device_train_batch_size=args.micro_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        learning_rate=args.learning_rate, num_train_epochs=args.epochs, max_steps=args.max_steps,
+        learning_rate=args.learning_rate, num_train_epochs=args.epochs,
         bf16=True, gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         lr_scheduler_type="cosine", warmup_ratio=args.warmup_ratio,
@@ -265,37 +300,39 @@ def run(args):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--method", choices=["sft", "dpo"], required=True)
-    parser.add_argument("--train", type=Path, required=True)
-    parser.add_argument("--dev", type=Path, required=True)
-    parser.add_argument("--test", type=Path)
-    parser.add_argument("--prompt", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--model", default="/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it")
-    parser.add_argument("--source-language", default="en")
-    parser.add_argument("--target-language", default="fr")
-    parser.add_argument("--learning-rate", type=float)
-    parser.add_argument("--micro-batch-size", type=int, default=1)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
-    parser.add_argument("--epochs", type=float, default=1)
-    parser.add_argument("--max-steps", type=int, default=-1, help="Override epoch budget with optimizer steps")
-    parser.add_argument("--max-length", type=int, default=2048)
-    parser.add_argument("--max-new-tokens", type=int, default=512)
-    parser.add_argument("--eval-steps", type=int, default=100, help="Greedy dev evaluation every N optimizer steps")
-    parser.add_argument("--eval-batch-size", type=int, default=1)
-    parser.add_argument("--logging-steps", type=int, default=10)
-    parser.add_argument("--warmup-ratio", type=float, default=0.03)
-    parser.add_argument("--lora-rank", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=int, default=32)
-    parser.add_argument("--lora-dropout", type=float, default=0.05)
-    parser.add_argument("--lora-targets", default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj")
-    parser.add_argument("--dpo-beta", type=float, default=0.1)
-    parser.add_argument("--dpo-loss", choices=["sigmoid", "hinge", "ipo"], default="sigmoid")
-    parser.add_argument("--attention-implementation", choices=["sdpa", "flash_attention_2"], default="sdpa")
-    parser.add_argument("--bleu-tokenizer", default="13a")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter) #argparse.RawDescriptionHelpFormatter)
+    common = parser.add_argument_group("Common")
+    common.add_argument("--method", choices=["sft", "dpo"], required=True, help="Training method")
+    common.add_argument("--train", type=Path, required=True, help="Training JSON/JSONL or TSV, optionally .gz; SFT: src/tgt; DPO: src/tgt/reject")
+    common.add_argument("--dev", type=Path, required=True, help="Validation JSON/JSONL or TSV with src/tgt, optionally .gz; DPO reject is accepted but unused")
+    common.add_argument("--test", type=Path, help="Optional test file in the same format as dev; omit for dev-only evaluation")
+    common.add_argument("--prompt", type=Path, required=True, help="Jinja chat-template file for source-only translation prompts")
+    common.add_argument("--output", type=Path, required=True, help="New or empty output directory for adapters, checkpoints, hypotheses, and metrics")
+    common.add_argument("--model", default="/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it", help="TranslateGemma checkpoint directory or Hugging Face model ID")
+    common.add_argument("--source-language", default="en", help="Source language code supplied to the prompt")
+    common.add_argument("--target-language", default="fr", help="Target language code supplied to the prompt")
+    common.add_argument("--learning-rate", type=float, help="Optimizer learning rate; when omitted, SFT uses 1e-4 and DPO uses 5e-6", default=argparse.SUPPRESS)
+    common.add_argument("--micro-batch-size", type=int, default=1, help="Training examples per GPU forward/backward pass (DPO processes both responses per example)")
+    common.add_argument("--gradient-accumulation-steps", type=int, default=16, help="Microbatches per optimizer step; effective batch = micro-batch-size times this value")
+    common.add_argument("--epochs", type=float, default=1, help="Training epochs; fractional values are allowed (e.g. 1.5)")
+    common.add_argument("--max-length", type=int, default=2048, help="Prompt plus completion token limit, including special tokens; exclude oversized samples without truncation")
+    common.add_argument("--max-new-tokens", type=int, default=512, help="Maximum response tokens for greedy evaluation; prompts must fit max-length with this reservation")
+    common.add_argument("--eval-steps", type=int, default=100, help="Greedy dev evaluation every N optimizer steps")
+    common.add_argument("--eval-batch-size", type=int, default=1, help="Source sentences decoded together during evaluation")
+    common.add_argument("--logging-steps", type=int, default=10, help="Optimizer steps between training log updates")
+    common.add_argument("--warmup-ratio", type=float, default=0.03, help="Fraction of optimizer steps used for learning-rate warmup")
+    common.add_argument("--lora-rank", type=int, default=16, help="LoRA rank")
+    common.add_argument("--lora-alpha", type=int, default=32, help="LoRA scaling numerator; adapter scale is alpha/rank")
+    common.add_argument("--lora-dropout", type=float, default=0.05, help="LoRA dropout probability during training")
+    common.add_argument("--lora-targets", default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj", help="Comma-separated module names to adapt with LoRA")
+    common.add_argument("--attention-implementation", choices=["sdpa", "flash_attention_2"], default="sdpa", help="Attention backend; flash_attention_2 requires the flash-attn package")
+    common.add_argument("--bleu-tokenizer", default="13a", help="SacreBLEU tokenization method; does not affect model tokenization")
+    parser.add_argument_group("SFT", "No SFT-only options; use the common options.")
+    dpo = parser.add_argument_group("DPO")
+    dpo.add_argument("--dpo-beta", type=float, default=0.1, help="DPO regularization coefficient relative to the frozen base model")
+    dpo.add_argument("--dpo-loss", choices=["sigmoid", "hinge", "ipo"], default="sigmoid", help="Preference loss")
     args = parser.parse_args(argv)
-    if args.learning_rate is None:
+    if not hasattr(args, "learning_rate"):
         args.learning_rate = 1e-4 if args.method == "sft" else 5e-6
     positive = (args.micro_batch_size, args.gradient_accumulation_steps, args.epochs,
                 args.max_length, args.max_new_tokens, args.eval_steps, args.eval_batch_size,
@@ -304,8 +341,6 @@ def parse_args(argv=None):
         parser.error("positive budgets required; max-new-tokens must be less than max-length")
     if not 0 <= args.lora_dropout < 1 or not 0 <= args.warmup_ratio <= 1:
         parser.error("invalid dropout or warmup ratio")
-    if args.max_steps != -1 and args.max_steps <= 0:
-        parser.error("max-steps must be positive or -1")
     return args
 
 

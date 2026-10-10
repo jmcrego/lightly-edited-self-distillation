@@ -52,9 +52,9 @@ class TrainingTests(unittest.TestCase):
 
     def test_dpo_checks_both_targets_and_identical_pairs(self):
         self.args.method = "dpo"
-        self.write_rows([{"src": "x", "chosen": "y", "rejected": "z" * 30},
-                         {"src": "x", "chosen": "y\n", "rejected": "y"},
-                         {"src": "x", "chosen": "good", "rejected": "bad"}])
+        self.write_rows([{"src": "x", "tgt": "y", "reject": "z" * 30},
+                         {"src": "x", "tgt": "y\n", "reject": "y"},
+                         {"src": "x", "tgt": "good", "reject": "bad"}])
         rows, excluded = prepare_training(self.path, self.tokenizer, "template", self.args)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["chosen_input_ids"], [ord(c) for c in "good"] + [9])
@@ -67,10 +67,62 @@ class TrainingTests(unittest.TestCase):
         self.assertEqual(rows[0]["line"], 2)
         self.assertEqual(excluded[0]["line"], 1)
         path.write_text("bad\ttoo\tmany\n")
-        with self.assertRaisesRegex(ValueError, "source<TAB>"):
+        with self.assertRaisesRegex(ValueError, "src<TAB>"):
             prepare_eval(path, self.tokenizer, "template", self.args)
 
     def test_method_specific_defaults(self):
         common = ["--train", "train", "--dev", "dev", "--prompt", "prompt", "--output", "out"]
         self.assertEqual(parse_args(["--method", "sft"] + common).learning_rate, 1e-4)
         self.assertEqual(parse_args(["--method", "dpo"] + common).learning_rate, 5e-6)
+        args = parse_args(["--method", "sft", "--epochs", "1.5"] + common)
+        self.assertEqual(args.epochs, 1.5)
+        self.assertIsNone(args.test)
+        self.assertFalse(hasattr(args, "max_steps"))
+
+    def test_plain_and_gzip_formats_for_both_methods(self):
+        for method in ("sft", "dpo"):
+            self.args.method = method
+            row = {"src": "Hi", "tgt": "Salut"}
+            if method == "dpo":
+                row["reject"] = "Bad"
+            expected = None
+            for suffix in (".json", ".jsonl", ".tsv", ".json.gz", ".jsonl.gz", ".tsv.gz"):
+                with self.subTest(method=method, suffix=suffix):
+                    path = Path(self.temp.name) / ("data" + suffix)
+                    if ".tsv" in suffix:
+                        text = "\t".join(row.values()) + "\n"
+                    elif ".jsonl" in suffix:
+                        text = json.dumps(row) + "\n"
+                    else:
+                        text = json.dumps([row], indent=2)
+                    if suffix.endswith(".gz"):
+                        with gzip.open(path, "wt", encoding="utf-8") as stream:
+                            stream.write(text)
+                    else:
+                        path.write_text(text, encoding="utf-8")
+                    training, excluded = prepare_training(path, self.tokenizer, "template", self.args)
+                    self.assertEqual(excluded, [])
+                    if expected is None:
+                        expected = training
+                    self.assertEqual(training, expected)
+                    valid, excluded = prepare_eval(path, self.tokenizer, "template", self.args)
+                    self.assertEqual(excluded, [])
+                    self.assertEqual(valid[0]["tgt"], "Salut")
+
+    def test_json_object_and_json_lines_with_json_suffix(self):
+        path = Path(self.temp.name) / "data.json"
+        row = {"src": "Hi", "tgt": "Salut"}
+        for text, count in ((json.dumps(row, indent=2), 1),
+                            (json.dumps(row) + "\n" + json.dumps(row) + "\n", 2)):
+            path.write_text(text)
+            training, excluded = prepare_training(path, self.tokenizer, "template", self.args)
+            self.assertEqual(len(training), count)
+            self.assertEqual(excluded, [])
+
+    def test_dpo_validation_accepts_pair_only(self):
+        self.args.method = "dpo"
+        path = Path(self.temp.name) / "dev.tsv"
+        path.write_text("Hi\tSalut\n")
+        rows, excluded = prepare_eval(path, self.tokenizer, "template", self.args)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(excluded, [])
