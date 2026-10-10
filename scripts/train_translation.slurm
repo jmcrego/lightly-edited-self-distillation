@@ -20,6 +20,23 @@ cd "${SLURM_SUBMIT_DIR:?Submit from the repository root}"
 export LC_ALL=C
 export LANG=C
 export PYTHONUTF8=1
+# Slurm may inherit Conda variables without its interactive shell function.
+# Initialize the hook before module cleanup can call `conda deactivate`.
+CONDA_COMMAND="${CONDA_EXE:-$(type -P conda || true)}"
+if [[ -n "$CONDA_COMMAND" ]] && ! declare -F conda >/dev/null; then
+  CONDA_HOOK="$("$CONDA_COMMAND" shell.bash hook)"
+  set +u
+  eval "$CONDA_HOOK"
+  set -u
+fi
+if declare -F conda >/dev/null; then
+  set +u
+  while [[ "${CONDA_SHLVL:-0}" -gt 0 ]]; do
+    conda deactivate
+  done
+  set -u
+fi
+printf 'Loading training modules\n'
 module purge
 module load arch/h100
 module load python/3.11.5

@@ -64,7 +64,7 @@ Submit from the repository root after updating the launcher input paths:
 
 ```bash
 mkdir -p logs
-sbatch scripts/train_translation.slurm
+LC_ALL=C LANG=C sbatch scripts/train_translation.slurm
 ```
 
 Before training, the launcher checks dependency imports, prints PyTorch,
@@ -72,3 +72,17 @@ Transformers, TRL, and PEFT versions, initializes CUDA, and allocates a tensor
 on the single visible GPU. Results appear in `logs/train-JOBID.out`; failures
 appear in `logs/train-JOBID.err`. Successful environment verification does not
 guarantee that a full training run will fit in GPU memory.
+
+## Shell Startup Troubleshooting
+
+If the job reports `CondaError: Run 'conda init' before 'conda deactivate'`,
+the batch shell may have inherited Conda environment variables without its
+shell function. The launcher initializes the Conda Bash hook when an executable
+is available, then deactivates inherited environments before module cleanup.
+It does not run `conda init` or modify shell startup files.
+
+Submit with `LC_ALL=C LANG=C` as above to avoid inheriting an unavailable
+`en_US.UTF-8` locale. The launcher also sets these variables internally, but
+that happens after Bash starts and cannot suppress an earlier startup warning.
+If the Conda error persists, inspect the full job log to identify whether it
+comes from a startup file or module hook before the launcher setup runs.
