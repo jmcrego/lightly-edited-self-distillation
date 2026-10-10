@@ -66,22 +66,22 @@ PROMPT=prompts/base_translation.txt
 # TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected.jsonl
 # DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
 # TEST=""
-# OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
 # METHOD="sft"
+# OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
 
 ### exp 2
 # TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-human.jsonl
 # DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-human.jsonl
 # TEST=""
-# OUTPUT="training/${METHOD}-seg-human-${SLURM_JOB_ID}"
 # METHOD="sft"
+# OUTPUT="training/${METHOD}-seg-human-${SLURM_JOB_ID}"
 
 ### exp 3
 TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected-base.jsonl
 DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected-base.jsonl
 TEST=""
-OUTPUT="training/${METHOD}-seg-corrected-base-${SLURM_JOB_ID}"
 METHOD="dpo"
+OUTPUT="training/${METHOD}-seg-corrected-base-${SLURM_JOB_ID}"
 
 
 # srun --gres=gpu:1 python -u - <<'PY'
