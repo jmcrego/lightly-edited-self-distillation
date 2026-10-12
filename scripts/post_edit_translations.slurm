@@ -51,6 +51,6 @@ srun python -u scripts/post_edit_translations.py \
   --output data/roche.10K.postedited122b.full.jsonl.gz \
   "$@"
 
-
-
-# gunzip -cd data/roche.10K.postedited122b.full.jsonl.gz | jq -r '[.seg, .tgts[0].human, .tgts[0].base, .tgts[0].corrected] | select(all(.[]; . != null and . != "")) | @tsv' > data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
+gunzip -cd data/roche.10K.postedited122b.full.jsonl.gz | \
+    jq -r '[.seg, .tgts[0].human, .tgts[0].base, .tgts[0].corrected] | select(all(.[]; . != null and . != "")) | @tsv' \
+    > data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
