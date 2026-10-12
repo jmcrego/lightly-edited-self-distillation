@@ -64,15 +64,14 @@ TRAIN=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
 DEV=data/roche.test.enfr.gz
 
 ### exp 1
-METHOD="sft"
-OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
-COLS="--src_col 1 --tgt_col 4"
+# METHOD="sft"
+# OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --tgt_col 4"
 
 ### exp 2
-# METHOD="sft"
-# OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --tgt_col 2"
-
+METHOD="sft"
+OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
+COLS="--src_col 1 --tgt_col 2"
 
 ### exp 3
 # METHOD="dpo"
