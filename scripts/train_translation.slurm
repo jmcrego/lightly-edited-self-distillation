@@ -69,14 +69,14 @@ DEV=data/roche.test.enfr.gz
 # COLS="--src_col 1 --tgt_col 4"
 
 ### exp 2
-METHOD="sft"
-OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
-COLS="--src_col 1 --tgt_col 2"
+# METHOD="sft"
+# OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --tgt_col 2"
 
 ### exp 3
-# METHOD="dpo"
-# OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
+METHOD="dpo"
+OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
+COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
 
 
