@@ -1,6 +1,7 @@
 #!/bin/bash
 # Usage: sbatch scripts/comet.slurm SRC TGT HYP
-# Create logs/ before submission. Output: HYP.comet (COMET JSON scores).
+# Create logs/ before submission. Outputs: HYP.comet (summary) and
+# HYP.comet.details (JSON sentence scores and detected error spans).
 # Cache facebook/xlm-roberta-xl config/tokenizer on a login node first.
 #SBATCH --job-name=xcomet
 #SBATCH --account=eut@h100
@@ -24,16 +25,19 @@ SRC="$1"
 TGT="$2"
 HYP="$3"
 OUTPUT="${HYP}.comet"
+DETAILS="${OUTPUT}.details"
 for file in "$SRC" "$TGT" "$HYP"; do
   if [[ ! -r "$file" ]]; then
     printf 'Input file not readable: %s\n' "$file" >&2
     exit 1
   fi
 done
-if [[ -e "$OUTPUT" ]]; then
-  printf 'Output already exists: %s\n' "$OUTPUT" >&2
-  exit 1
-fi
+for file in "$OUTPUT" "$DETAILS"; do
+  if [[ -e "$file" ]]; then
+    printf 'Output already exists: %s\n' "$file" >&2
+    exit 1
+  fi
+done
 
 export LC_ALL=C
 export LANG=C
@@ -94,5 +98,6 @@ srun --gres=gpu:1 comet-score \
   --model "$MODEL" \
   --gpus 1 \
   --batch_size "$BATCH_SIZE" \
-  --to_json "$OUTPUT"
-printf 'COMET results: %s\n' "$OUTPUT"
+  --only_system \
+  --to_json "$DETAILS" > "$OUTPUT"
+printf 'COMET summary: %s\nSentence details: %s\n' "$OUTPUT" "$DETAILS"
