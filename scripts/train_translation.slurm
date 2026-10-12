@@ -61,7 +61,7 @@ export OMP_NUM_THREADS=8
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
 PROMPT=prompts/base_translation.txt
 TRAIN=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
-DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
+DEV=data/roche.test.enfr
 
 ### exp 1
 # TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected.jsonl
