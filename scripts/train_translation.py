@@ -5,13 +5,11 @@ Install in a separate CUDA training environment:
   pip install 'transformers==4.57.6' 'trl==0.19.1' 'peft==0.17.1' \
     'accelerate>=1.4,<2' 'datasets>=3,<4' 'sacrebleu>=2.5,<3' sentencepiece
 PyTorch must be a CUDA build. Check --help for all experiment settings.
-Train/dev/test accept .json (object or array), .jsonl, or .tsv, optionally .gz.
-SFT: src/tgt fields or src<TAB>tgt columns.
-DPO training: src/tgt/reject fields or src<TAB>tgt<TAB>reject columns;
-tgt is chosen and reject is rejected. Dev/test use src/tgt for BLEU/chrF;
-an additional DPO reject field/column is accepted but unused for decoding.
-All options apply to both methods unless marked DPO-only. There are no
-SFT-only options. Run once per target variant/LR/batch setting.
+Train: headerless four-column TSV, src/human/base/corrected, optionally .gz.
+Dev: headerless two-column TSV, src/human, optionally .gz; evaluation always
+uses these columns, independently of training selectors. Column indices are
+1-based. SFT requires --tgt_col; DPO requires --chosen_col and --rejected_col.
+Run once per target variant/LR/batch setting.
 Adapters use the text-only model returned by load_model(), not the multimodal
 wrapper. Reload them against that same text-only base model.
 """
@@ -88,15 +86,25 @@ def completion_ids(tokenizer, text):
     return tokenizer.encode(text.rstrip(), add_special_tokens=False) + [end]
 
 
+def read_tsv(path, columns):
+    with open_text(path) as stream:
+        for line, text in enumerate(stream, 1):
+            values = text.rstrip("\r\n").split("\t")
+            if len(values) != columns:
+                raise ValueError(f"{path}:{line}: expected exactly {columns} TAB-separated fields")
+            yield line, values
+
+
 def prepare_training(path, tokenizer, prompt, args):
     rows, excluded = [], []
-    fields = ["src", "tgt"] if args.method == "sft" else ["src", "tgt", "reject"]
-    for line, value in read_examples(path, fields):
-        if any(not isinstance(value.get(k), str) or not value[k].strip() for k in fields):
+    columns = [args.src_col, args.tgt_col] if args.method == "sft" else [args.src_col, args.chosen_col, args.rejected_col]
+    for line, values in read_tsv(path, 4):
+        selected = [values[column - 1] for column in columns]
+        if any(not value.strip() for value in selected):
             excluded.append({"line": line, "reason": "missing_or_empty_field"})
             continue
-        prefix = prompt_ids(tokenizer, prompt, value["src"], args)
-        endings = [completion_ids(tokenizer, value[k]) for k in fields[1:]]
+        prefix = prompt_ids(tokenizer, prompt, selected[0], args)
+        endings = [completion_ids(tokenizer, value) for value in selected[1:]]
         if any(len(prefix) + len(end) > args.max_length for end in endings):
             excluded.append({"line": line, "reason": "max_length"})
             continue
@@ -114,14 +122,14 @@ def prepare_training(path, tokenizer, prompt, args):
 
 def prepare_eval(path, tokenizer, prompt, args):
     rows, excluded = [], []
-    for line, value in read_examples(path, ["src", "tgt"], optional_reject=args.method == "dpo"):
-        if any(not isinstance(value.get(k), str) or not value[k].strip() for k in ("src", "tgt")):
-            raise ValueError(f"{path}:{line}: expected nonempty src/tgt fields")
-        ids = prompt_ids(tokenizer, prompt, value["src"], args)
+    for line, (source, human) in read_tsv(path, 2):
+        if not source.strip() or not human.strip():
+            raise ValueError(f"{path}:{line}: expected nonempty src/human fields")
+        ids = prompt_ids(tokenizer, prompt, source, args)
         if len(ids) + args.max_new_tokens > args.max_length:
             excluded.append({"line": line, "reason": "generation_context_budget"})
         else:
-            rows.append({"line": line, "src": value["src"], "tgt": value["tgt"], "input_ids": ids})
+            rows.append({"line": line, "src": source, "tgt": human, "input_ids": ids})
     if not rows:
         raise ValueError(f"{path}: no evaluation rows fit the generation budget")
     return rows, excluded
@@ -234,20 +242,15 @@ def run(args):
     reasons = dict(Counter(row["reason"] for row in excluded))
     print(f"Retained {len(training)} training samples; excluded {len(excluded)}: {reasons}", flush=True)
     if not training:
-        fields = "src/tgt" if args.method == "sft" else "src/tgt/reject"
-        raise ValueError(f"no training samples survived filtering ({reasons}); expected {fields} fields. "
-                         "Convert seg/tgts postediting records with scripts/prepare_dataset.py. "
+        raise ValueError(f"no training samples survived filtering ({reasons}); check selected TSV columns. "
                          f"See {args.output / 'excluded.json'}")
     dev, dev_excluded = prepare_eval(args.dev, tokenizer, prompt, args)
-    test, test_excluded = prepare_eval(args.test, tokenizer, prompt, args) if args.test else ([], [])
-    write_json(args.output / "excluded.json", {"train": excluded, "dev": dev_excluded, "test": test_excluded})
+    write_json(args.output / "excluded.json", {"train": excluded, "dev": dev_excluded})
     model = get_peft_model(load_model(args), LoraConfig(
         task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout, target_modules=args.lora_targets.split(",")))
     model.print_trainable_parameters()
     evaluate(model, tokenizer, dev, args.output / "baseline-dev", args, baseline=True)
-    if test:
-        evaluate(model, tokenizer, test, args.output / "baseline-test", args, baseline=True)
 
     class DevCallback(TrainerCallback):
         def __init__(self):
@@ -300,19 +303,15 @@ def run(args):
     callback.score(trainer.state.global_step)
     trainer.save_model(str(args.output / "final-adapter"))
     tokenizer.save_pretrained(args.output / "tokenizer")
-    model.load_adapter(str(args.output / "best-adapter"), adapter_name="best")
-    model.set_adapter("best")
-    if test:
-        evaluate(model, tokenizer, test, args.output / "best-test", args)
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter) #argparse.RawDescriptionHelpFormatter)
     common = parser.add_argument_group("Common")
     common.add_argument("--method", choices=["sft", "dpo"], required=True, help="Training method")
-    common.add_argument("--train", type=Path, required=True, help="Training JSON/JSONL or TSV, optionally .gz; SFT: src/tgt; DPO: src/tgt/reject")
-    common.add_argument("--dev", type=Path, required=True, help="Validation JSON/JSONL or TSV with src/tgt, optionally .gz; DPO reject is accepted but unused")
-    common.add_argument("--test", type=Path, help="Optional test file in the same format as dev; omit for dev-only evaluation")
+    common.add_argument("--train", type=Path, required=True, help="Headerless four-column TSV: src/human/base/corrected; optionally .gz")
+    common.add_argument("--dev", type=Path, required=True, help="Headerless two-column TSV: src/human; always evaluated against human; optionally .gz")
+    common.add_argument("--src_col", type=int, choices=range(1, 5), default=1, help="1-based training source column; does not affect dev")
     common.add_argument("--prompt", type=Path, required=True, help="Jinja chat-template file for source-only translation prompts")
     common.add_argument("--output", type=Path, required=True, help="New or empty output directory for adapters, checkpoints, hypotheses, and metrics")
     common.add_argument("--model", default="/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it", help="TranslateGemma checkpoint directory or Hugging Face model ID")
@@ -334,11 +333,21 @@ def parse_args(argv=None):
     common.add_argument("--lora-targets", default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj", help="Comma-separated module names to adapt with LoRA")
     common.add_argument("--attention-implementation", choices=["sdpa", "flash_attention_2"], default="sdpa", help="Attention backend; flash_attention_2 requires the flash-attn package")
     common.add_argument("--bleu-tokenizer", default="13a", help="SacreBLEU tokenization method; does not affect model tokenization")
-    parser.add_argument_group("SFT", "No SFT-only options; use the common options.")
+    sft = parser.add_argument_group("SFT")
+    sft.add_argument("--tgt_col", type=int, choices=range(1, 5), help="Required for SFT: 1-based training target column (2 human, 3 base, 4 corrected)")
     dpo = parser.add_argument_group("DPO")
+    dpo.add_argument("--chosen_col", type=int, choices=range(1, 5), help="Required for DPO: 1-based preferred target column")
+    dpo.add_argument("--rejected_col", type=int, choices=range(1, 5), help="Required for DPO: 1-based rejected target column")
     dpo.add_argument("--dpo-beta", type=float, default=0.1, help="DPO regularization coefficient relative to the frozen base model")
     dpo.add_argument("--dpo-loss", choices=["sigmoid", "hinge", "ipo"], default="sigmoid", help="Preference loss")
     args = parser.parse_args(argv)
+    if args.method == "sft" and args.tgt_col is None:
+        parser.error("SFT requires --tgt_col")
+    if args.method == "dpo":
+        if args.chosen_col is None or args.rejected_col is None:
+            parser.error("DPO requires --chosen_col and --rejected_col")
+        if args.chosen_col == args.rejected_col:
+            parser.error("chosen_col and rejected_col must differ")
     if not hasattr(args, "learning_rate"):
         args.learning_rate = 1e-4 if args.method == "sft" else 5e-6
     positive = (args.micro_batch_size, args.gradient_accumulation_steps, args.epochs,

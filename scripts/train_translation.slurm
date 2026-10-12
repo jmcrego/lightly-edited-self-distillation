@@ -58,54 +58,30 @@ export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=8
 
 # Experiment settings. Input files must already use src/tgt[/reject], not tgts.
-METHOD=sft
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
 PROMPT=prompts/base_translation.txt
+TRAIN=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
+DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
 
 ### exp 1
 # TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected.jsonl
 # DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
-# TEST=""
 # METHOD="sft"
 # OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
 
 ### exp 2
 # TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-human.jsonl
 # DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-human.jsonl
-# TEST=""
 # METHOD="sft"
 # OUTPUT="training/${METHOD}-seg-human-${SLURM_JOB_ID}"
 
 ### exp 3
 TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected-base.jsonl
 DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected-base.jsonl
-TEST=""
 METHOD="dpo"
 OUTPUT="training/${METHOD}-seg-corrected-base-${SLURM_JOB_ID}"
 
 
-# srun --gres=gpu:1 python -u - <<'PY'
-# import torch
-# import transformers
-# import trl
-# import peft
-# import datasets
-# import sacrebleu
-
-# print("PyTorch:", torch.__version__, "CUDA:", torch.version.cuda, flush=True)
-# print("Transformers:", transformers.__version__, "TRL:", trl.__version__,
-#       "PEFT:", peft.__version__, flush=True)
-# torch.cuda.init()
-# if torch.cuda.device_count() != 1:
-#     raise RuntimeError("Expected exactly one visible GPU")
-# probe = torch.empty(1, device="cuda:0")
-# print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
-# PY
-
-TEST_ARGS=()
-if [[ -n "$TEST" ]]; then
-  TEST_ARGS=(--test "$TEST")
-fi
 
 # Learning rate uses the script's method-specific default unless overridden.
 srun --gres=gpu:1 python -u scripts/train_translation.py \
@@ -113,7 +89,6 @@ srun --gres=gpu:1 python -u scripts/train_translation.py \
   --model "$MODEL" \
   --train "$TRAIN" \
   --dev "$DEV" \
-  "${TEST_ARGS[@]}" \
   --prompt "$PROMPT" \
   --output "$OUTPUT" \
   --source-language en \

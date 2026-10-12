@@ -44,18 +44,20 @@ class TrainingTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.path = Path(self.temp.name) / "train.jsonl.gz"
+        self.path = Path(self.temp.name) / "train.tsv.gz"
         self.args = SimpleNamespace(method="sft", source_language="en", target_language="fr",
-                                    max_length=20, max_new_tokens=5)
+                                    max_length=20, max_new_tokens=5, src_col=1,
+                                    tgt_col=4, chosen_col=4, rejected_col=3)
         self.tokenizer = Tokenizer()
 
     def write_rows(self, rows):
         with gzip.open(self.path, "wt", encoding="utf-8") as stream:
             for row in rows:
-                stream.write(json.dumps(row) + "\n")
+                values = [row["src"], row.get("human", "Human"), row.get("reject", "Base"), row.get("tgt") or ""]
+                stream.write("\t".join(values) + "\n")
 
     def test_sft_masks_prompt_and_adds_turn_end(self):
-        self.write_rows([{"src": "Hi", "tgt": "Salut\n"}])
+        self.write_rows([{"src": "Hi", "tgt": "Salut "}])
         rows, excluded = prepare_training(self.path, self.tokenizer, "template", self.args)
         self.assertEqual(excluded, [])
         self.assertEqual(rows[0]["labels"], [-100] * 4 + [ord(c) for c in "Salut"] + [9])
@@ -71,7 +73,7 @@ class TrainingTests(unittest.TestCase):
     def test_dpo_checks_both_targets_and_identical_pairs(self):
         self.args.method = "dpo"
         self.write_rows([{"src": "x", "tgt": "y", "reject": "z" * 30},
-                         {"src": "x", "tgt": "y\n", "reject": "y"},
+                         {"src": "x", "tgt": "y ", "reject": "y"},
                          {"src": "x", "tgt": "good", "reject": "bad"}])
         rows, excluded = prepare_training(self.path, self.tokenizer, "template", self.args)
         self.assertEqual(len(rows), 1)
@@ -85,34 +87,26 @@ class TrainingTests(unittest.TestCase):
         self.assertEqual(rows[0]["line"], 2)
         self.assertEqual(excluded[0]["line"], 1)
         path.write_text("bad\ttoo\tmany\n")
-        with self.assertRaisesRegex(ValueError, "src<TAB>"):
+        with self.assertRaisesRegex(ValueError, "exactly 2"):
             prepare_eval(path, self.tokenizer, "template", self.args)
 
     def test_method_specific_defaults(self):
         common = ["--train", "train", "--dev", "dev", "--prompt", "prompt", "--output", "out"]
-        self.assertEqual(parse_args(["--method", "sft"] + common).learning_rate, 1e-4)
-        self.assertEqual(parse_args(["--method", "dpo"] + common).learning_rate, 5e-6)
-        args = parse_args(["--method", "sft", "--epochs", "1.5"] + common)
+        self.assertEqual(parse_args(["--method", "sft", "--tgt_col", "4"] + common).learning_rate, 1e-4)
+        self.assertEqual(parse_args(["--method", "dpo", "--chosen_col", "4", "--rejected_col", "3"] + common).learning_rate, 5e-6)
+        args = parse_args(["--method", "sft", "--tgt_col", "2", "--epochs", "1.5"] + common)
         self.assertEqual(args.epochs, 1.5)
-        self.assertIsNone(args.test)
+        self.assertFalse(hasattr(args, "test"))
         self.assertFalse(hasattr(args, "max_steps"))
 
-    def test_plain_and_gzip_formats_for_both_methods(self):
+    def test_plain_and_gzip_tsv_for_both_methods(self):
         for method in ("sft", "dpo"):
             self.args.method = method
-            row = {"src": "Hi", "tgt": "Salut"}
-            if method == "dpo":
-                row["reject"] = "Bad"
             expected = None
-            for suffix in (".json", ".jsonl", ".tsv", ".json.gz", ".jsonl.gz", ".tsv.gz"):
+            for suffix in (".tsv", ".tsv.gz"):
                 with self.subTest(method=method, suffix=suffix):
                     path = Path(self.temp.name) / ("data" + suffix)
-                    if ".tsv" in suffix:
-                        text = "\t".join(row.values()) + "\n"
-                    elif ".jsonl" in suffix:
-                        text = json.dumps(row) + "\n"
-                    else:
-                        text = json.dumps([row], indent=2)
+                    text = "Hi\tHuman\tBad\tSalut\n"
                     if suffix.endswith(".gz"):
                         with gzip.open(path, "wt", encoding="utf-8") as stream:
                             stream.write(text)
@@ -123,19 +117,36 @@ class TrainingTests(unittest.TestCase):
                     if expected is None:
                         expected = training
                     self.assertEqual(training, expected)
-                    valid, excluded = prepare_eval(path, self.tokenizer, "template", self.args)
-                    self.assertEqual(excluded, [])
-                    self.assertEqual(valid[0]["tgt"], "Salut")
 
-    def test_json_object_and_json_lines_with_json_suffix(self):
-        path = Path(self.temp.name) / "data.json"
-        row = {"src": "Hi", "tgt": "Salut"}
-        for text, count in ((json.dumps(row, indent=2), 1),
-                            (json.dumps(row) + "\n" + json.dumps(row) + "\n", 2)):
-            path.write_text(text)
-            training, excluded = prepare_training(path, self.tokenizer, "template", self.args)
-            self.assertEqual(len(training), count)
-            self.assertEqual(excluded, [])
+    def test_column_selection_and_dev_independence(self):
+        self.write_rows([{"src": "Hi", "human": "Human", "tgt": "Corrected"}])
+        self.args.tgt_col = 2
+        self.args.src_col = 3
+        training, excluded = prepare_training(self.path, self.tokenizer, "template", self.args)
+        self.assertEqual(excluded, [])
+        self.assertEqual(self.tokenizer.messages[0]["content"][0]["text"], "Base")
+        self.assertEqual(training[0]["labels"][-6:], [ord(c) for c in "Human"] + [9])
+        dev = Path(self.temp.name) / "dev.tsv"
+        dev.write_text("Hi\tHuman\n")
+        rows, _ = prepare_eval(dev, self.tokenizer, "template", self.args)
+        self.assertEqual(rows[0]["src"], "Hi")
+        self.assertEqual(rows[0]["tgt"], "Human")
+
+    def test_training_requires_four_fields(self):
+        with gzip.open(self.path, "wt") as stream:
+            stream.write("Hi\tHuman\tBase\n")
+        with self.assertRaisesRegex(ValueError, "exactly 4"):
+            prepare_training(self.path, self.tokenizer, "template", self.args)
+
+    def test_cli_requires_method_specific_columns(self):
+        from contextlib import redirect_stderr
+        import io
+        common = ["--train", "train", "--dev", "dev", "--prompt", "prompt", "--output", "out"]
+        for extra in (["--method", "sft"], ["--method", "dpo"],
+                      ["--method", "dpo", "--chosen_col", "3", "--rejected_col", "3"],
+                      ["--method", "sft", "--tgt_col", "5"]):
+            with self.subTest(options=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                parse_args(extra + common)
 
     def test_dpo_validation_accepts_pair_only(self):
         self.args.method = "dpo"
