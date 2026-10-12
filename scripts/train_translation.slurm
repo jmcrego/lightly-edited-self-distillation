@@ -61,25 +61,23 @@ export OMP_NUM_THREADS=8
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
 PROMPT=prompts/base_translation.txt
 TRAIN=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
-DEV=data/roche.test.enfr
+DEV=data/roche.test.enfr.gz
 
 ### exp 1
-# TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected.jsonl
-# DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected.jsonl
-# METHOD="sft"
-# OUTPUT="training/${METHOD}-seg-corrected-${SLURM_JOB_ID}"
+METHOD="sft"
+OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
+COLS="--src_col 1 --tgt_col 4"
 
 ### exp 2
-# TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-human.jsonl
-# DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-human.jsonl
 # METHOD="sft"
-# OUTPUT="training/${METHOD}-seg-human-${SLURM_JOB_ID}"
+# OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --tgt_col 2"
+
 
 ### exp 3
-TRAIN=data/roche.10K.postedited122b.full.shuf.trn.seg-corrected-base.jsonl
-DEV=data/roche.10K.postedited122b.full.shuf.dev.seg-corrected-base.jsonl
-METHOD="dpo"
-OUTPUT="training/${METHOD}-seg-corrected-base-${SLURM_JOB_ID}"
+# METHOD="dpo"
+# OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
 
 
@@ -88,6 +86,7 @@ srun --gres=gpu:1 python -u scripts/train_translation.py \
   --method "$METHOD" \
   --model "$MODEL" \
   --train "$TRAIN" \
+  $COLS \
   --dev "$DEV" \
   --prompt "$PROMPT" \
   --output "$OUTPUT" \
