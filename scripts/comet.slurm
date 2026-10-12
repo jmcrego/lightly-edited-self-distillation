@@ -1,6 +1,6 @@
 #!/bin/bash
 # Usage: sbatch scripts/comet.slurm SRC TGT HYP
-# Create logs/ before submission. Outputs: HYP.comet (summary) and
+# Create logs/ before submission. Outputs: HYP.comet (sentence/global scores) and
 # HYP.comet.details (JSON sentence scores and detected error spans).
 # Cache facebook/xlm-roberta-xl config/tokenizer on a login node first.
 #SBATCH --job-name=xcomet
@@ -98,6 +98,5 @@ srun --gres=gpu:1 comet-score \
   --model "$MODEL" \
   --gpus 1 \
   --batch_size "$BATCH_SIZE" \
-  --only_system \
   --to_json "$DETAILS" > "$OUTPUT"
-printf 'COMET summary: %s\nSentence details: %s\n' "$OUTPUT" "$DETAILS"
+printf 'COMET scores: %s\nSentence details: %s\n' "$OUTPUT" "$DETAILS"
