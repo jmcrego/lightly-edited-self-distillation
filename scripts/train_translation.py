@@ -162,7 +162,7 @@ def load_model(args):
     return model.to("cuda")
 
 
-def evaluate(model, tokenizer, rows, directory, args, baseline=False):
+def evaluate(model, tokenizer, rows, directory, args, baseline=False, score_references=True):
     import torch
     from sacrebleu.metrics import BLEU, CHRF
 
@@ -199,12 +199,13 @@ def evaluate(model, tokenizer, rows, directory, args, baseline=False):
     with (directory / "hyps.jsonl").open("w", encoding="utf-8") as stream:
         for detail in details:
             stream.write(json.dumps(detail, ensure_ascii=False) + "\n")
-    references = [[row["tgt"] for row in rows]]
-    bleu, chrf = BLEU(tokenize=args.bleu_tokenizer), CHRF()
-    scores = {"bleu": bleu.corpus_score(hypotheses, references).score,
-              "chrf": chrf.corpus_score(hypotheses, references).score,
-              "sentences": len(rows), "token_limit_hits": sum(d["hit_token_limit"] for d in details),
-              "bleu_signature": str(bleu.get_signature()), "chrf_signature": str(chrf.get_signature())}
+    scores = {"sentences": len(rows), "token_limit_hits": sum(d["hit_token_limit"] for d in details)}
+    if score_references:
+        references = [[row["tgt"] for row in rows]]
+        bleu, chrf = BLEU(tokenize=args.bleu_tokenizer), CHRF()
+        scores.update({"bleu": bleu.corpus_score(hypotheses, references).score,
+                       "chrf": chrf.corpus_score(hypotheses, references).score,
+                       "bleu_signature": str(bleu.get_signature()), "chrf_signature": str(chrf.get_signature())})
     write_json(directory / "metrics.json", scores)
     print(f"{directory}: {json.dumps(scores)}", flush=True)
     return scores

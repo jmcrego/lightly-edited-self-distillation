@@ -42,6 +42,13 @@ installed PyTorch build can use the GPU.
 The default attention backend is `sdpa`; `flash-attn` is not required unless
 selecting `--attention-implementation flash_attention_2`.
 
+## COMET Installation
+
+COMET was subsequently installed in this same training environment. See the
+[README installation commands](../README.md#training-environment) for the
+verified NumPy, PyArrow, and Setuptools compatibility pins and import checks.
+Package installation must not be performed while training jobs use the venv.
+
 ## Activation
 
 For a later interactive session, load the modules above and activate:
