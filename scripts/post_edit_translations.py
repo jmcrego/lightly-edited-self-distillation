@@ -372,7 +372,7 @@ def run(args, pairs, prompt):
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--synthetic", type=Path, default=ROOT / "data/transgemma.10_data.jsonl.gz")
+    parser.add_argument("--synthetic", type=Path, required=True)
     parser.add_argument("--references", type=Path,
                         help="separate reference file; otherwise read embedded human fields")
     parser.add_argument("--no-reference", action="store_true", help="use source and student only")
@@ -393,8 +393,6 @@ def parse_args():
     args = parser.parse_args()
     if args.no_reference:
         args.references = None
-    elif args.references is None and args.synthetic.resolve() == (ROOT / "data/transgemma.10_data.jsonl.gz").resolve():
-        args.references = ROOT / "data/bitext.10_data.jsonl.gz"
     if any(n <= 0 for n in (args.tensor_parallel_size, args.batch_size, args.max_model_len, args.max_new_tokens)):
         parser.error("GPU, batch, and token counts must be positive")
     if args.limit is not None and args.limit <= 0:

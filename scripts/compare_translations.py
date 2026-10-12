@@ -92,10 +92,8 @@ def percentage(count, total):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("left", nargs="?", type=Path,
-                        default=ROOT / "data/bitext.10_data.jsonl.gz")
-    parser.add_argument("right", nargs="?", type=Path,
-                        default=ROOT / "data/transgemma.10_data.jsonl.gz")
+    parser.add_argument("left", type=Path)
+    parser.add_argument("right", type=Path)
     parser.add_argument("--ignore-case-punct", action="store_true",
                         help="ignore case and Unicode punctuation in token and line statistics")
     args = parser.parse_args()

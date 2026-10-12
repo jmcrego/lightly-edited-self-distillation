@@ -8,8 +8,8 @@ Unchanged translations remain in the training dataset.
 For files produced by `translate_tsv.py`, the human reference is stored in each
 target's `human` field and read automatically when `--references` is
 omitted. A separate `--references` JSONL file is still supported and takes
-precedence. The original default TranslateGemma input still uses the original
-`data/bitext.10_data.jsonl.gz` reference file. `--no-reference` disables both
+precedence. Supply the translation input explicitly with `--synthetic`.
+`--no-reference` disables both
 reference sources; the current minimal post-editing prompt expects references.
 
 The default teacher candidate is `Qwen/Qwen3.5-122B-A10B-FP8`, the official
