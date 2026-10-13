@@ -55,13 +55,19 @@ probe = torch.empty(1, device="cuda:0")
 print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
 PY
 
+FILE=data/roche.random.10K.enfr.gz
+FOUT=data/roche.random.10K.transgemma12b.jsonl.gz
+
+FILE=data/roche.random.50K.enfr.gz
+FOUT=data/roche.random.50K.transgemma12b.jsonl.gz
+
 srun --gres=gpu:1 python -u scripts/translate_tsv.py \
-  --input data/roche.random.10K.enfr.gz \
+  --input $FILE \
   --source-language en \
   --target-language fr \
   --model "$MODEL" \
   --prompt prompts/base_translation.txt \
   --tensor-parallel-size 1 \
   --batch-size 32 \
-  --output data/roche.random.10K.transgemma12b.jsonl.gz \
+  --output $FOUT \
   "$@"
