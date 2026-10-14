@@ -43,7 +43,7 @@ export OMP_NUM_THREADS=8
 #srun python -u scripts/post_edit_translations.py --model "$MODEL" --tensor-parallel-size 1 --batch-size 32 "$@"
 
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-122B-A10B-FP8
-FILE=data/roche.50K.transgemma12b.full.jsonl.gz
+FILE=data/roche.random.50K.transgemma12b.jsonl.gz
 FOUT=data/roche.50K.postedited122b.full.jsonl.gz
 FALL=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
 
