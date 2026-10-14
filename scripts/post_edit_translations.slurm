@@ -45,7 +45,7 @@ export OMP_NUM_THREADS=8
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-122B-A10B-FP8
 FILE=data/roche.random.50K.transgemma12b.jsonl.gz
 FOUT=data/roche.50K.postedited122b.full.jsonl.gz
-FALL=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
+FALL=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
 
 srun python -u scripts/post_edit_translations.py \
   --model "$MODEL" \
