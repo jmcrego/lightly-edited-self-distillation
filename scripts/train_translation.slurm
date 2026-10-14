@@ -60,23 +60,21 @@ export OMP_NUM_THREADS=8
 # Experiment settings. Input files must already use src/tgt[/reject], not tgts.
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
 PROMPT=prompts/base_translation.txt
-TRAIN=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
+TRAIN=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
 DEV=data/roche.test.enfr.gz
 
-### exp 1
-# METHOD="sft"
-# OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --tgt_col 4"
+METHOD="sft"
+OUTPUT="training/50K-${METHOD}-corrected-${SLURM_JOB_ID}"
+COLS="--src_col 1 --tgt_col 4"
 
-### exp 2
 # METHOD="sft"
-# OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
+# OUTPUT="training/50K-${METHOD}-human-${SLURM_JOB_ID}"
 # COLS="--src_col 1 --tgt_col 2"
 
 ### exp 3
-METHOD="dpo"
-OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
-COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
+# METHOD="dpo"
+# OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
 
 
