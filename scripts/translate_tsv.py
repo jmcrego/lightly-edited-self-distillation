@@ -83,19 +83,23 @@ def gemma3_rope_compatibility(config):
     return config
 
 
-def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
+def generate_batch(llm, tokenizer, sampling, batch, args, start=0, prompt_builder=None, output_field="base"):
     prompts = []
     entries = []
     positions = []
     for offset, reference in enumerate(batch):
         record = deepcopy(reference)
-        record["tgts"][0]["base"] = None
+        target = next(t for t in record["tgts"] if t["language"] == args.target_language)
+        target[output_field] = None
         entries.append({"line": start + offset + 1, "record": record,
                         "skip_reason": None})
-        token_ids = tokenizer.apply_chat_template(
-            translation_messages(reference["seg"], args.source_language, args.target_language),
-            chat_template=args.prompt.read_text(encoding="utf-8"),
-            tokenize=True, add_generation_prompt=True)
+        if prompt_builder is None:
+            token_ids = tokenizer.apply_chat_template(
+                translation_messages(reference["seg"], args.source_language, args.target_language),
+                chat_template=args.prompt.read_text(encoding="utf-8"),
+                tokenize=True, add_generation_prompt=True)
+        else:
+            token_ids = prompt_builder(tokenizer, reference["seg"], args)
         if len(token_ids) + args.max_new_tokens > args.max_model_len:
             entries[offset]["skip_reason"] = "context_budget_exceeded"
             continue
@@ -117,7 +121,8 @@ def generate_batch(llm, tokenizer, sampling, batch, args, start=0):
         if not isinstance(answer.text, str) or not answer.text.strip():
             entries[offset]["skip_reason"] = "empty_translation"
             continue
-        entries[offset]["record"]["tgts"][0]["base"] = answer.text.rstrip()
+        target = next(t for t in entries[offset]["record"]["tgts"] if t["language"] == args.target_language)
+        target[output_field] = answer.text.rstrip()
     return entries
 
 
@@ -131,7 +136,7 @@ def check_skip_policy_migration(previous, current):
         raise ValueError("resume settings differ; only migration to the 512-token skip policy is supported")
 
 
-def run(args, references):
+def run(args, references, prompt_builder=None, engine_overrides=None, driver_path=None, output_field="base"):
     output = args.output.resolve()
     reference_output = args.references_output.resolve() if args.references_output else None
     audit = Path(str(output) + ".audit.jsonl")
@@ -150,6 +155,11 @@ def run(args, references):
               "references_output": str(reference_output) if reference_output else None, "dtype": "bfloat16"}
     config["prompt"] = args.prompt.read_text(encoding="utf-8")
     config["failure_policy"] = "skip"
+    if driver_path is not None:
+        config["driver_sha256"] = digest(driver_path)
+        config["chat_format"] = "native_no_thinking"
+        config["engine_overrides"] = engine_overrides or {}
+        config["output_field"] = output_field
     if not args.resume and any(path.exists() for path in paths):
         raise ValueError("output/checkpoint exists; use --resume or a new --output")
     if args.resume and not manifest.exists():
@@ -182,6 +192,19 @@ def run(args, references):
                     references[index]["language"], references[index]["seg"]):
                 raise ValueError("checkpoint source differs from input")
             targets = record.get("tgts", [])
+            if output_field != "base":
+                matches = [t for t in targets if t.get("language") == args.target_language]
+                if len(matches) != 1:
+                    raise ValueError("invalid checkpoint target language")
+                translation = matches[0].get(output_field)
+                if not ((isinstance(translation, str) and translation.strip())
+                        or (translation is None and entry.get("skip_reason"))):
+                    raise ValueError("invalid checkpoint translation")
+                restored = deepcopy(record)
+                next(t for t in restored["tgts"] if t["language"] == args.target_language).pop(output_field, None)
+                if restored != references[index]:
+                    raise ValueError("checkpoint record differs from input")
+                continue
             if (len(targets) != 1 or targets[0].get("language") != args.target_language
                     or not ((isinstance(targets[0].get("base"), str) and targets[0]["base"].strip())
                             or (targets[0].get("base") is None and entry.get("skip_reason")))):
@@ -208,12 +231,13 @@ def run(args, references):
                       max_model_len=args.max_model_len, max_num_seqs=args.batch_size,
                       gpu_memory_utilization=args.gpu_memory_utilization, seed=args.seed,
                       language_model_only=True, enable_prefix_caching=True,
-                      generation_config="vllm")
+                      generation_config="vllm", **(engine_overrides or {}))
             tokenizer = llm.get_tokenizer()
             sampling = SamplingParams(temperature=0, max_tokens=args.max_new_tokens, seed=args.seed)
             for start in range(len(completed), len(references), args.batch_size):
                 entries = generate_batch(llm, tokenizer, sampling,
-                                         references[start:start + args.batch_size], args, start)
+                                         references[start:start + args.batch_size], args, start,
+                                         prompt_builder=prompt_builder, output_field=output_field)
                 for entry in entries:
                     stream.write((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
                 stream.flush()
@@ -229,16 +253,16 @@ def run(args, references):
         print(f"Separate human references: {reference_output}")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, required=True, help="source<TAB>reference TSV, optionally .gz")
-    parser.add_argument("--output", type=Path, required=True, help="base translations, .jsonl.gz or .json.gz")
+def parse_args(argv=None, defaults=None, description=None, prompt_help=None, input_help=None, require_gzip=True):
+    parser = argparse.ArgumentParser(description=description or __doc__)
+    parser.add_argument("--input", type=Path, required=True, help=input_help or "source<TAB>reference TSV, optionally .gz")
+    parser.add_argument("--output", type=Path, required=True, help="Translation JSONL output" + (", must end in .gz" if require_gzip else ", optionally .gz"))
     parser.add_argument("--references-output", type=Path, help="optionally export a separate reference file")
     parser.add_argument("--source-language", required=True, help="TranslateGemma language code, e.g. en")
     parser.add_argument("--target-language", required=True, help="TranslateGemma language code, e.g. fr")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="HF model ID or local directory")
     parser.add_argument("--prompt", type=Path, default=ROOT / "prompts/base_translation.txt",
-                        help="editable Gemma chat template (Jinja)")
+                        help=prompt_help or "editable Gemma chat template (Jinja)")
     parser.add_argument("--revision", help="model/tokenizer revision for reproducibility")
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=32)
@@ -250,7 +274,8 @@ def parse_args():
     parser.add_argument("--skip-header", action="store_true", help="skip the first TSV line")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="validate TSV and show model input; no GPU needed")
-    args = parser.parse_args()
+    parser.set_defaults(**(defaults or {}))
+    args = parser.parse_args(argv)
     if args.source_language == args.target_language:
         parser.error("source and target languages must differ")
     if any(value <= 0 for value in (args.batch_size, args.tensor_parallel_size,
@@ -260,7 +285,7 @@ def parse_args():
         parser.error("--limit must be positive")
     if args.max_new_tokens >= args.max_model_len or not 0 < args.gpu_memory_utilization < 1:
         parser.error("invalid context budget or GPU memory utilization")
-    if not args.output.name.endswith(".gz"):
+    if require_gzip and not args.output.name.endswith(".gz"):
         parser.error("--output must end in .gz")
     if args.references_output and not args.references_output.name.endswith(".gz"):
         parser.error("--references-output must end in .gz")
