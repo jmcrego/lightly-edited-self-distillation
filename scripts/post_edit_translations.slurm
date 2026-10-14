@@ -39,18 +39,22 @@ export TOKENIZERS_PARALLELISM=false
 export VLLM_WORKER_MULTIPROC_METHOD=spawn
 export OMP_NUM_THREADS=8
 
-MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-27B-FP8
+#MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-27B-FP8
 #srun python -u scripts/post_edit_translations.py --model "$MODEL" --tensor-parallel-size 1 --batch-size 32 "$@"
 
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/Qwen/Qwen3.5-122B-A10B-FP8
+FILE=data/roche.50K.transgemma12b.full.jsonl.gz
+FOUT=data/roche.50K.postedited122b.full.jsonl.gz
+FALL=data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
+
 srun python -u scripts/post_edit_translations.py \
   --model "$MODEL" \
   --tensor-parallel-size 4 \
   --batch-size 32 \
-  --synthetic data/roche.10K.transgemma12b.full.jsonl.gz \
-  --output data/roche.10K.postedited122b.full.jsonl.gz \
+  --synthetic $FILE \
+  --output $FOUT \
   "$@"
 
-gunzip -cd data/roche.10K.postedited122b.full.jsonl.gz | \
+gunzip -cd $FOUT | \
     jq -r '[.seg, .tgts[0].human, .tgts[0].base, .tgts[0].corrected] | select(all(.[]; . != null and . != "")) | @tsv' \
-    > data/roche.10K.postedited122b.full.src-human-base-corrected.tsv
+    > $FALL
