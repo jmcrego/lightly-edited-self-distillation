@@ -71,11 +71,8 @@ probe = torch.empty(1, device="cuda:0")
 print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
 PY
 
-FILE=data/roche.random.10K.enfr.gz
-FOUT=data/roche.10K.qwen122b.full.jsonl.gz
-
-FILE=data/roche.random.50K.enfr.gz
-FOUT=data/roche.random.50K.qwen122b.jsonl.gz
+FILE=data/all.jsonl
+FOUT=data/all.qwen122b.jsonl.gz
 
 srun --gres=gpu:4 python -u scripts/translate_json_qwen3.5-122B.py \
   --input "$FILE" \
