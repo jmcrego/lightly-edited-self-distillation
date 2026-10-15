@@ -10,7 +10,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=24
 #SBATCH --hint=nomultithread
-#SBATCH --time=04:00:00
+#SBATCH --time=18:00:00
 #SBATCH --output=logs/train-%j.out
 #SBATCH --error=logs/train-%j.err
 
@@ -63,9 +63,9 @@ PROMPT=prompts/base_translation.txt
 TRAIN=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
 DEV=data/roche.test.enfr.gz
 
-METHOD="sft"
-OUTPUT="training/50K-${METHOD}-corrected-${SLURM_JOB_ID}"
-COLS="--src_col 1 --tgt_col 4"
+# METHOD="sft"
+# OUTPUT="training/50K-${METHOD}-corrected-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --tgt_col 4"
 
 # METHOD="sft"
 # OUTPUT="training/50K-${METHOD}-human-${SLURM_JOB_ID}"
