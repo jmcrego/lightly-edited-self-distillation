@@ -219,6 +219,24 @@ def evaluate(model, tokenizer, rows, directory, args, baseline=False, score_refe
     return scores
 
 
+def validate_resume(args):
+    checkpoint = args.resume_from_checkpoint
+    if checkpoint is None:
+        if args.output.exists() and any(args.output.iterdir()):
+            raise ValueError("output directory is not empty; use --resume-from-checkpoint or a new output directory")
+        return
+    if checkpoint.resolve().parent != (args.output / "checkpoints").resolve():
+        raise ValueError("resume checkpoint must belong to --output/checkpoints")
+    required = ("trainer_state.json", "optimizer.pt", "scheduler.pt", "adapter_config.json")
+    missing = [name for name in required if not (checkpoint / name).is_file()]
+    if not any((checkpoint / name).is_file() for name in ("adapter_model.safetensors", "adapter_model.bin")):
+        missing.append("adapter weights")
+    if missing:
+        raise ValueError(f"incomplete resume checkpoint: {', '.join(missing)}")
+    if not (args.output / "best.json").is_file() or not (args.output / "best-adapter").is_dir():
+        raise ValueError("resume requires the existing best.json and best-adapter directory")
+
+
 def run(args):
     import torch
     from datasets import Dataset
@@ -228,8 +246,7 @@ def run(args):
 
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
         raise ValueError("expose exactly one CUDA GPU for this script")
-    if args.output.exists() and any(args.output.iterdir()):
-        raise ValueError("output directory is not empty; select a new experiment directory")
+    validate_resume(args)
     args.output.mkdir(parents=True, exist_ok=True)
     prompt = args.prompt.read_text(encoding="utf-8")
     tokenizer = AutoTokenizer.from_pretrained(args.model)
@@ -250,12 +267,21 @@ def run(args):
         task_type="CAUSAL_LM", r=args.lora_rank, lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout, target_modules=args.lora_targets.split(",")))
     model.print_trainable_parameters()
-    evaluate(model, tokenizer, dev, args.output / "baseline-dev", args, baseline=True)
+    if args.resume_from_checkpoint is None:
+        evaluate(model, tokenizer, dev, args.output / "baseline-dev", args, baseline=True)
+    else:
+        print(f"Resuming from {args.resume_from_checkpoint}; skipping baseline evaluation", flush=True)
 
     class DevCallback(TrainerCallback):
         def __init__(self):
             self.best = float("-inf")
             self.last_step = None
+            if args.resume_from_checkpoint is not None:
+                self.best = json.loads((args.output / "best.json").read_text())["chrf"]
+                state = json.loads((args.resume_from_checkpoint / "trainer_state.json").read_text())
+                step = state["global_step"]
+                if (args.output / f"dev-step-{step}" / "metrics.json").is_file():
+                    self.last_step = step
 
         def score(self, step):
             if step == self.last_step:
@@ -299,7 +325,7 @@ def run(args):
                 precompute_ref_log_probs=True, precompute_ref_batch_size=1,
                 disable_dropout=False), train_dataset=Dataset.from_list(training),
             processing_class=tokenizer, callbacks=[callback])
-    trainer.train()
+    trainer.train(resume_from_checkpoint=str(args.resume_from_checkpoint) if args.resume_from_checkpoint else None)
     callback.score(trainer.state.global_step)
     trainer.save_model(str(args.output / "final-adapter"))
     tokenizer.save_pretrained(args.output / "tokenizer")
@@ -314,6 +340,7 @@ def parse_args(argv=None):
     common.add_argument("--src_col", type=int, choices=range(1, 5), default=1, help="1-based training source column; does not affect dev")
     common.add_argument("--prompt", type=Path, required=True, help="Jinja chat-template file for source-only translation prompts")
     common.add_argument("--output", type=Path, required=True, help="New or empty output directory for adapters, checkpoints, hypotheses, and metrics")
+    common.add_argument("--resume-from-checkpoint", type=Path, help="Resume a complete checkpoint under the existing output/checkpoints directory; keep data and training settings unchanged")
     common.add_argument("--model", default="/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it", help="TranslateGemma checkpoint directory or Hugging Face model ID")
     common.add_argument("--source-language", default="en", help="Source language code supplied to the prompt")
     common.add_argument("--target-language", default="fr", help="Target language code supplied to the prompt")

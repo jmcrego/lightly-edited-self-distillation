@@ -6,7 +6,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 
-from scripts.train_translation import parse_args, prepare_eval, prepare_training
+from scripts.train_translation import parse_args, prepare_eval, prepare_training, validate_resume
 from scripts import train_translation
 
 
@@ -40,6 +40,23 @@ class TrainingTests(unittest.TestCase):
                 SimpleNamespace(global_step=step), control, model=object())
             self.assertIs(result, control)
         self.assertEqual(calls, [100])
+
+    def test_resume_requires_full_checkpoint_in_same_run(self):
+        output = Path(self.temp.name) / "run"
+        checkpoint = output / "checkpoints" / "checkpoint-500"
+        checkpoint.mkdir(parents=True)
+        args = SimpleNamespace(output=output, resume_from_checkpoint=checkpoint)
+        with self.assertRaisesRegex(ValueError, "incomplete"):
+            validate_resume(args)
+        for name in ("trainer_state.json", "optimizer.pt", "scheduler.pt",
+                     "adapter_config.json", "adapter_model.safetensors"):
+            (checkpoint / name).write_text("{}")
+        (output / "best.json").write_text('{"chrf": 70}')
+        (output / "best-adapter").mkdir()
+        validate_resume(args)
+        args.output = output / "other"
+        with self.assertRaisesRegex(ValueError, "must belong"):
+            validate_resume(args)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
