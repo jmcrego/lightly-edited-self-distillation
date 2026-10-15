@@ -63,9 +63,9 @@ PROMPT=prompts/base_translation.txt
 TRAIN=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
 DEV=data/roche.test.enfr.gz
 
-# METHOD="sft"
-# OUTPUT="training/50K-${METHOD}-corrected-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --tgt_col 4"
+METHOD="sft"
+OUTPUT="training/50K-${METHOD}-corrected-${SLURM_JOB_ID}"
+COLS="--src_col 1 --tgt_col 4"
 
 # METHOD="sft"
 # OUTPUT="training/50K-${METHOD}-human-${SLURM_JOB_ID}"
