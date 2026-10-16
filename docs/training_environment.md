@@ -93,3 +93,25 @@ Submit with `LC_ALL=C LANG=C` as above to avoid inheriting an unavailable
 that happens after Bash starts and cannot suppress an earlier startup warning.
 If the Conda error persists, inspect the full job log to identify whether it
 comes from a startup file or module hook before the launcher setup runs.
+
+### CPO training
+
+`train_translation.py` also supports contrastive preference optimization (CPO)
+with the pinned TRL 0.19.1 environment. It combines a reference-free sigmoid
+preference loss with supervised NLL on the chosen translations:
+
+```bash
+python scripts/train_translation.py --method cpo \
+  --train data/train.tsv --dev data/dev.tsv \
+  --prompt prompts/base_translation.txt --output training/cpo-corrected-base \
+  --src_col 1 --chosen_col 4 --rejected_col 3 \
+  --cpo-beta 0.1 --cpo-alpha 1.0
+```
+
+Training TSV columns are source/human/base/corrected; dev columns are
+source/human. Identical preference pairs and oversized examples are excluded.
+CPO preserves the template's prompt tokens and Gemma end-of-turn token, masks
+prompt tokens in both losses, and uses no reference policy or reference-score
+precomputation. `--cpo-beta` scales the preference logits; `--cpo-alpha` weights
+the chosen-response NLL (zero disables it). The default learning rate is 5e-6,
+as for DPO. Greedy BLEU/chrF evaluation and best-adapter selection are unchanged.

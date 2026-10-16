@@ -76,7 +76,10 @@ COLS="--src_col 1 --tgt_col 4"
 # OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
 # COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
-
+# CPO uses the same preference columns as DPO.
+# METHOD="cpo"
+# OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
+# COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
 # Learning rate uses the script's method-specific default unless overridden.
 srun --gres=gpu:1 python -u scripts/train_translation.py \

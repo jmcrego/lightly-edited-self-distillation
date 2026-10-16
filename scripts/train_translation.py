@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-H100 TranslateGemma LoRA SFT/DPO with greedy BLEU/chrF evaluation.
+"""Single-H100 TranslateGemma LoRA SFT/DPO/CPO with greedy BLEU/chrF evaluation.
 
 Install in a separate CUDA training environment:
   pip install 'transformers==4.57.6' 'trl==0.19.1' 'peft==0.17.1' \
@@ -8,7 +8,7 @@ PyTorch must be a CUDA build. Check --help for all experiment settings.
 Train: headerless four-column TSV, src/human/base/corrected, optionally .gz.
 Dev: headerless two-column TSV, src/human, optionally .gz; evaluation always
 uses these columns, independently of training selectors. Column indices are
-1-based. SFT requires --tgt_col; DPO requires --chosen_col and --rejected_col.
+1-based. SFT requires --tgt_col; DPO/CPO require --chosen_col and --rejected_col.
 Run once per target variant/LR/batch setting.
 Adapters use the text-only model returned by load_model(), not the multimodal
 wrapper. Reload them against that same text-only base model.
@@ -118,6 +118,23 @@ def prepare_training(path, tokenizer, prompt, args):
             rows.append({"prompt_input_ids": prefix, "chosen_input_ids": endings[0],
                          "rejected_input_ids": endings[1]})
     return rows, excluded
+
+
+def cpo_tokenized_row(feature):
+    """Expand prevalidated completions into TRL 0.19.1 CPO's full sequences.
+
+    Keep the chat-template prompt and Gemma turn EOS verbatim; only response
+    tokens contribute to either the preference loss or the chosen NLL loss.
+    """
+    prompt = feature["prompt_input_ids"]
+    row = {"prompt_input_ids": prompt, "prompt_attention_mask": [1] * len(prompt)}
+    for name in ("chosen", "rejected"):
+        completion = feature[f"{name}_input_ids"]
+        ids = prompt + completion
+        row.update({f"{name}_input_ids": ids,
+                    f"{name}_attention_mask": [1] * len(ids),
+                    f"{name}_labels": [-100] * len(prompt) + completion})
+    return row
 
 
 def prepare_eval(path, tokenizer, prompt, args):
@@ -242,7 +259,7 @@ def run(args):
     from datasets import Dataset
     from peft import LoraConfig, get_peft_model
     from transformers import AutoTokenizer, Trainer, TrainerCallback, TrainingArguments
-    from trl import DPOConfig, DPOTrainer
+    from trl import CPOConfig, CPOTrainer, DPOConfig, DPOTrainer
 
     if not torch.cuda.is_available() or torch.cuda.device_count() != 1:
         raise ValueError("expose exactly one CUDA GPU for this script")
@@ -312,7 +329,7 @@ def run(args):
         trainer = Trainer(model=model, args=TrainingArguments(**common),
             train_dataset=Dataset.from_list(training), data_collator=TargetCollator(tokenizer.pad_token_id),
             processing_class=tokenizer, callbacks=[callback])
-    else:
+    elif args.method == "dpo":
         class TokenizedDPOTrainer(DPOTrainer):
             def _prepare_dataset(self, dataset, processing_class, args, dataset_name):
                 # Already tokenized and length-checked; preserve Gemma turn EOS
@@ -325,6 +342,20 @@ def run(args):
                 precompute_ref_log_probs=True, precompute_ref_batch_size=1,
                 disable_dropout=False), train_dataset=Dataset.from_list(training),
             processing_class=tokenizer, callbacks=[callback])
+    else:
+        class TokenizedCPOTrainer(CPOTrainer):
+            def tokenize_row(self, feature, model=None):
+                # CPO uses a different batch schema from DPO. Bypass its text
+                # tokenization, EOS insertion, and truncation, as for DPO above.
+                return cpo_tokenized_row(feature)
+
+        trainer = TokenizedCPOTrainer(model=model,
+            args=CPOConfig(**common, beta=args.cpo_beta, cpo_alpha=args.cpo_alpha,
+                loss_type="sigmoid", max_length=args.max_length,
+                max_prompt_length=args.max_length - 1,
+                remove_unused_columns=False, disable_dropout=False),
+            train_dataset=Dataset.from_list(training),
+            processing_class=tokenizer, callbacks=[callback])
     trainer.train(resume_from_checkpoint=str(args.resume_from_checkpoint) if args.resume_from_checkpoint else None)
     callback.score(trainer.state.global_step)
     trainer.save_model(str(args.output / "final-adapter"))
@@ -334,7 +365,7 @@ def run(args):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter) #argparse.RawDescriptionHelpFormatter)
     common = parser.add_argument_group("Common")
-    common.add_argument("--method", choices=["sft", "dpo"], required=True, help="Training method")
+    common.add_argument("--method", choices=["sft", "dpo", "cpo"], required=True, help="Training method")
     common.add_argument("--train", type=Path, required=True, help="Headerless four-column TSV: src/human/base/corrected; optionally .gz")
     common.add_argument("--dev", type=Path, required=True, help="Headerless two-column TSV: src/human; always evaluated against human; optionally .gz")
     common.add_argument("--src_col", type=int, choices=range(1, 5), default=1, help="1-based training source column; does not affect dev")
@@ -344,8 +375,8 @@ def parse_args(argv=None):
     common.add_argument("--model", default="/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it", help="TranslateGemma checkpoint directory or Hugging Face model ID")
     common.add_argument("--source-language", default="en", help="Source language code supplied to the prompt")
     common.add_argument("--target-language", default="fr", help="Target language code supplied to the prompt")
-    common.add_argument("--learning-rate", type=float, help="Optimizer learning rate; when omitted, SFT uses 1e-4 and DPO uses 5e-6", default=argparse.SUPPRESS)
-    common.add_argument("--micro-batch-size", type=int, default=1, help="Training examples per GPU forward/backward pass (DPO processes both responses per example)")
+    common.add_argument("--learning-rate", type=float, help="Optimizer learning rate; when omitted, SFT uses 1e-4 and DPO/CPO use 5e-6", default=argparse.SUPPRESS)
+    common.add_argument("--micro-batch-size", type=int, default=1, help="Training examples per GPU forward/backward pass (DPO/CPO process both responses per example)")
     common.add_argument("--gradient-accumulation-steps", type=int, default=16, help="Microbatches per optimizer step; effective batch = micro-batch-size times this value")
     common.add_argument("--epochs", type=float, default=1, help="Training epochs; fractional values are allowed (e.g. 1.5)")
     common.add_argument("--max-length", type=int, default=2048, help="Prompt plus completion token limit, including special tokens; exclude oversized samples without truncation")
@@ -362,26 +393,32 @@ def parse_args(argv=None):
     common.add_argument("--bleu-tokenizer", default="13a", help="SacreBLEU tokenization method; does not affect model tokenization")
     sft = parser.add_argument_group("SFT")
     sft.add_argument("--tgt_col", type=int, choices=range(1, 5), help="Required for SFT: 1-based training target column (2 human, 3 base, 4 corrected)")
+    preference = parser.add_argument_group("Preference data (DPO/CPO)")
+    preference.add_argument("--chosen_col", type=int, choices=range(1, 5), help="Required for DPO/CPO: 1-based preferred target column")
+    preference.add_argument("--rejected_col", type=int, choices=range(1, 5), help="Required for DPO/CPO: 1-based rejected target column")
     dpo = parser.add_argument_group("DPO")
-    dpo.add_argument("--chosen_col", type=int, choices=range(1, 5), help="Required for DPO: 1-based preferred target column")
-    dpo.add_argument("--rejected_col", type=int, choices=range(1, 5), help="Required for DPO: 1-based rejected target column")
     dpo.add_argument("--dpo-beta", type=float, default=0.1, help="DPO regularization coefficient relative to the frozen base model")
     dpo.add_argument("--dpo-loss", choices=["sigmoid", "hinge", "ipo"], default="sigmoid", help="Preference loss")
+    cpo = parser.add_argument_group("CPO")
+    cpo.add_argument("--cpo-beta", type=float, default=0.1, help="CPO preference-logit scale (no reference policy)")
+    cpo.add_argument("--cpo-alpha", type=float, default=1.0, help="Weight of chosen-response NLL in CPO; zero disables the supervised term")
     args = parser.parse_args(argv)
     if args.method == "sft" and args.tgt_col is None:
         parser.error("SFT requires --tgt_col")
-    if args.method == "dpo":
+    if args.method in {"dpo", "cpo"}:
         if args.chosen_col is None or args.rejected_col is None:
-            parser.error("DPO requires --chosen_col and --rejected_col")
+            parser.error(f"{args.method.upper()} requires --chosen_col and --rejected_col")
         if args.chosen_col == args.rejected_col:
             parser.error("chosen_col and rejected_col must differ")
     if not hasattr(args, "learning_rate"):
         args.learning_rate = 1e-4 if args.method == "sft" else 5e-6
     positive = (args.micro_batch_size, args.gradient_accumulation_steps, args.epochs,
                 args.max_length, args.max_new_tokens, args.eval_steps, args.eval_batch_size,
-                args.logging_steps, args.lora_rank, args.lora_alpha, args.learning_rate, args.dpo_beta)
+                args.logging_steps, args.lora_rank, args.lora_alpha, args.learning_rate, args.dpo_beta, args.cpo_beta)
     if any(value <= 0 for value in positive) or args.max_new_tokens >= args.max_length:
         parser.error("positive budgets required; max-new-tokens must be less than max-length")
+    if not args.cpo_alpha >= 0:
+        parser.error("cpo-alpha must be nonnegative")
     if not 0 <= args.lora_dropout < 1 or not 0 <= args.warmup_ratio <= 1:
         parser.error("invalid dropout or warmup ratio")
     return args

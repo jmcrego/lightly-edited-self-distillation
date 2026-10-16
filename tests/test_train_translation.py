@@ -97,6 +97,39 @@ class TrainingTests(unittest.TestCase):
         self.assertEqual(rows[0]["chosen_input_ids"], [ord(c) for c in "good"] + [9])
         self.assertEqual([r["reason"] for r in excluded], ["max_length", "identical_preferences"])
 
+    def test_cpo_full_sequences_mask_prompt_and_preserve_turn_end(self):
+        self.args.method = "cpo"
+        self.write_rows([{"src": "Hi", "tgt": "good", "reject": "bad"},
+                         {"src": "Hi", "tgt": "same", "reject": "same"},
+                         {"src": "Hi", "tgt": "good", "reject": "x" * 30}])
+        rows, excluded = prepare_training(self.path, self.tokenizer, "template", self.args)
+        self.assertEqual([r["reason"] for r in excluded], ["identical_preferences", "max_length"])
+        feature = rows[0]
+        row = train_translation.cpo_tokenized_row(feature)
+        prompt = feature["prompt_input_ids"]
+        for name, text in (("chosen", "good"), ("rejected", "bad")):
+            completion = [ord(c) for c in text] + [9]
+            self.assertEqual(row[f"{name}_input_ids"], prompt + completion)
+            self.assertEqual(row[f"{name}_labels"], [-100] * len(prompt) + completion)
+            self.assertEqual(row[f"{name}_attention_mask"], [1] * (len(prompt) + len(completion)))
+            self.assertEqual(feature[f"{name}_input_ids"], completion)
+        self.assertEqual(row["prompt_attention_mask"], [1] * len(prompt))
+
+    def test_cpo_options_and_validation(self):
+        from contextlib import redirect_stderr
+        import io
+        common = ["--method", "cpo", "--train", "train", "--dev", "dev",
+                  "--prompt", "prompt", "--output", "out"]
+        columns = ["--chosen_col", "4", "--rejected_col", "3"]
+        args = parse_args(common + columns)
+        self.assertEqual((args.learning_rate, args.cpo_beta, args.cpo_alpha), (5e-6, 0.1, 1.0))
+        args = parse_args(common + columns + ["--cpo-alpha", "0", "--cpo-beta", "0.2"])
+        self.assertEqual((args.cpo_alpha, args.cpo_beta), (0, 0.2))
+        for extra in ([], ["--chosen_col", "3", "--rejected_col", "3"],
+                      columns + ["--cpo-alpha", "-1"], columns + ["--cpo-beta", "0"]):
+            with self.subTest(options=extra), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                parse_args(common + extra)
+
     def test_eval_preserves_original_line_numbers(self):
         path = self.path.with_suffix(".tsv")
         path.write_text("long sentence exceeds limit\tref\nHi\tSalut\n")
@@ -117,7 +150,7 @@ class TrainingTests(unittest.TestCase):
         self.assertFalse(hasattr(args, "max_steps"))
 
     def test_plain_and_gzip_tsv_for_both_methods(self):
-        for method in ("sft", "dpo"):
+        for method in ("sft", "dpo", "cpo"):
             self.args.method = method
             expected = None
             for suffix in (".tsv", ".tsv.gz"):
