@@ -233,3 +233,25 @@ Local checks:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## Post-edit named translations in one JSONL file
+
+For records with separate same-language targets containing `seg` (human
+reference), `translategemma-12b` (student), and optionally `qwen3.5-122b`, run:
+
+```bash
+python3 scripts/post_edit_json_qwen3.5-122B.py \
+  --input data/translations.jsonl --output data/translations.postedited.jsonl \
+  --dry-run
+```
+
+Remove `--dry-run` to run Qwen3.5-122B-A10B-FP8 with the existing vLLM
+post-editing environment on four GPUs. Use `--model` for a local checkpoint.
+The default prompt is `prompts/minimal_post_edit.txt`. Source and target
+languages are read from each record. Each student requires exactly one
+same-language `seg` reference; existing Qwen translations are not sent to the
+model. All original fields and target order are preserved, and
+`translategemma-12b+qwen3.5-122b` is added to the student target object.
+Both input and output support `.gz`. The shared inference options, audit,
+context-overflow handling, and `--resume` behavior described above apply;
+unavailable corrections are written as null. Resume uses the original input.

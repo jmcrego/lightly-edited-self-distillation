@@ -284,7 +284,7 @@ def check_context_skip_migration(previous, current):
             == {k: v for k, v in current.items() if k not in ignored})
 
 
-def run(args, pairs, prompt):
+def run(args, pairs, prompt, *, batch_generator=generate_batch, driver_path=None):
     output = args.output.resolve()
     audit = Path(str(output) + ".audit.jsonl")
     manifest = Path(str(output) + ".manifest.json")
@@ -300,6 +300,8 @@ def run(args, pairs, prompt):
               "quantization": "from_model_config", "language_model_only": True,
               "enable_thinking": False}
     config["output_validation"] = False
+    if driver_path is not None:
+        config["driver_sha256"] = digest(driver_path)
     config["context_overflow_policy"] = "skip"
     output.parent.mkdir(parents=True, exist_ok=True)
     if not args.resume and any(p.exists() for p in (output, audit, manifest, summary_path)):
@@ -343,7 +345,7 @@ def run(args, pairs, prompt):
                                       seed=args.seed,
                                       structured_outputs=StructuredOutputsParams(json=RESULT_SCHEMA))
             for start in range(len(completed), len(pairs), args.batch_size):
-                entries = generate_batch(llm, tokenizer, sampling,
+                entries = batch_generator(llm, tokenizer, sampling,
                                          pairs[start:start + args.batch_size], prompt, args)
                 for offset, entry in enumerate(entries):
                     entry["line"] = start + offset + 1
