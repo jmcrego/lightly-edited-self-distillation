@@ -64,17 +64,17 @@ TRAIN=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
 DEV=data/roche.test.enfr.gz
 
 # METHOD="sft"
-# OUTPUT="training/50K-${METHOD}-corrected-${SLURM_JOB_ID}"
+# OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
 # COLS="--src_col 1 --tgt_col 4"
 
 # METHOD="sft"
-# OUTPUT="training/50K-${METHOD}-human-${SLURM_JOB_ID}"
+# OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
 # COLS="--src_col 1 --tgt_col 2"
 
-### exp 3
-# METHOD="dpo"
-# OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
+# # ### exp 3 (not working)
+# # # METHOD="dpo"
+# # # OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
+# # # COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
 # CPO uses the same preference columns as DPO.
 METHOD="cpo"
