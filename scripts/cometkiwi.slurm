@@ -13,7 +13,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --hint=nomultithread
-#SBATCH --time=01:00:00
+#SBATCH --time=04:00:00
 #SBATCH --output=logs/cometkiwi-%j.out
 #SBATCH --error=logs/cometkiwi-%j.err
 
