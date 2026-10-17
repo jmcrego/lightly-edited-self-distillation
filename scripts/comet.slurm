@@ -1,7 +1,9 @@
 #!/bin/bash
-# Usage: sbatch scripts/comet.slurm SRC TGT HYP
+# Usage: sbatch scripts/comet.slurm SRC TGT HYP1 [HYP2 ... HYPN]
 # Create logs/ before submission. Outputs: HYP.comet (sentence/global scores) and
 # HYP.comet.details (JSON sentence scores and detected error spans).
+# Each hypothesis is scored separately; missing inputs or either existing output
+# cause that hypothesis to be skipped without stopping the batch.
 # Cache facebook/xlm-roberta-xl config/tokenizer on a login node first.
 #SBATCH --job-name=xcomet
 #SBATCH --account=eut@h100
@@ -17,27 +19,37 @@
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?Submit from the repository root}"
-if [[ $# -ne 3 ]]; then
-  printf 'Usage: sbatch scripts/comet.slurm SRC TGT HYP\n' >&2
+if [[ $# -lt 3 ]]; then
+  printf 'Usage: sbatch scripts/comet.slurm SRC TGT HYP1 [HYP2 ... HYPN]\n' >&2
   exit 1
 fi
 SRC="$1"
 TGT="$2"
-HYP="$3"
-OUTPUT="${HYP}.comet"
-DETAILS="${OUTPUT}.details"
-for file in "$SRC" "$TGT" "$HYP"; do
+shift 2
+for file in "$SRC" "$TGT"; do
   if [[ ! -r "$file" ]]; then
     printf 'Input file not readable: %s\n' "$file" >&2
     exit 1
   fi
 done
-for file in "$OUTPUT" "$DETAILS"; do
-  if [[ -e "$file" ]]; then
-    printf 'Output already exists: %s\n' "$file" >&2
-    exit 1
+
+# Filter before loading the environment so an entirely completed batch is a no-op.
+HYPOTHESES=()
+for HYP in "$@"; do
+  if [[ ! -f "$HYP" || ! -r "$HYP" ]]; then
+    printf 'Skipping missing or unreadable hypothesis: %s\n' "$HYP" >&2
+    continue
   fi
+  if [[ -e "${HYP}.comet" || -e "${HYP}.comet.details" ]]; then
+    printf 'Skipping hypothesis with existing output: %s\n' "$HYP" >&2
+    continue
+  fi
+  HYPOTHESES+=("$HYP")
 done
+if [[ ${#HYPOTHESES[@]} -eq 0 ]]; then
+  printf 'No hypotheses left to score.\n'
+  exit 0
+fi
 
 export LC_ALL=C
 export LANG=C
@@ -74,6 +86,19 @@ if [[ ! -f "$MODEL" ]]; then
   exit 1
 fi
 
+for HYP in "${HYPOTHESES[@]}"; do
+  OUTPUT="${HYP}.comet"
+  DETAILS="${OUTPUT}.details"
+  # Recheck in case a repeated argument or another job produced these outputs.
+  if [[ ! -f "$HYP" || ! -r "$HYP" ]]; then
+    printf 'Skipping missing or unreadable hypothesis: %s\n' "$HYP" >&2
+    continue
+  fi
+  if [[ -e "$OUTPUT" || -e "$DETAILS" ]]; then
+    printf 'Skipping hypothesis with existing output: %s\n' "$HYP" >&2
+    continue
+  fi
+
 srun --gres=gpu:1 python -u - "$SRC" "$TGT" "$HYP" <<'PY'
 import sys
 import torch
@@ -100,3 +125,4 @@ srun --gres=gpu:1 comet-score \
   --batch_size "$BATCH_SIZE" \
   --to_json "$DETAILS" > "$OUTPUT"
 printf 'COMET scores: %s\nSentence details: %s\n' "$OUTPUT" "$DETAILS"
+done
