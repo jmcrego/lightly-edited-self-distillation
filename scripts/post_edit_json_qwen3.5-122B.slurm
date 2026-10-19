@@ -81,4 +81,5 @@ srun --gres=gpu:4 python -u scripts/post_edit_json_qwen3.5-122B.py \
   --tensor-parallel-size 4 \
   --batch-size 32 \
   --output "$FOUT" \
+  --resume \
   "$@"
