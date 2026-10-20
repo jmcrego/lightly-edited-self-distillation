@@ -27,7 +27,12 @@ def load_json(path, args):
             values = json.load(stream)
         except json.JSONDecodeError:
             stream.seek(0)
-            values = [json.loads(line) for line in stream]
+            lines = list(stream)
+            try:
+                values = [json.loads(line) for line in lines]
+            except json.JSONDecodeError:
+                values = [{"language": args.source_language, "seg": line.rstrip("\r\n")}
+                          for line in lines]
         else:
             values = values if isinstance(values, list) else [values]
     records = []
