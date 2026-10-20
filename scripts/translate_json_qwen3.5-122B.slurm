@@ -74,6 +74,9 @@ PY
 FILE=data/all.jsonl
 FOUT=data/all.qwen122b.jsonl.gz
 
+FILE=data/test17.en
+FOUT=data/test17.en.qwen122b.jsonl.gz
+
 srun --gres=gpu:4 python -u scripts/translate_json_qwen3.5-122B.py \
   --input "$FILE" \
   --source-language en \
