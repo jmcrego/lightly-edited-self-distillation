@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""Translate source/reference TSV with TranslateGemma for minimal post-editing."""
+
+import argparse
+from copy import deepcopy
+import fcntl
+import json
+import os
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_MODEL = "/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it"
+
+if __package__:
+    from .post_edit_translations import (
+        atomic_json, digest, export_dataset, open_text, read_checkpoint,
+    )
+else:
+    from post_edit_translations import (
+        atomic_json, digest, export_dataset, open_text, read_checkpoint,
+    )
+
+
+def load_tsv(path, source_language, target_language, limit=None, skip_header=False):
+    rows = []
+    with open_text(path) as stream:
+        for number, line in enumerate(stream, 1):
+            if skip_header and number == 1:
+                continue
+            fields = line.rstrip("\r\n").split("\t")
+            if len(fields) != 2:
+                raise ValueError(f"{path}:{number}: expected exactly two TAB-separated fields")
+            source, reference = fields
+            if not source.strip() or not reference.strip():
+                raise ValueError(f"{path}:{number}: empty source or human reference")
+            if "\ufffd" in source or "\ufffd" in reference:
+                raise ValueError(f"{path}:{number}: invalid replacement character")
+            # Validate even rows beyond a pilot limit; never silently skip bad pairs.
+            if limit is None or len(rows) < limit:
+                rows.append({"language": source_language, "seg": source,
+                             "tgts": [{"language": target_language, "human": reference}]})
+    if not rows:
+        raise ValueError("no input sentence pairs")
+    return rows
+
+
+def translation_messages(source, source_language, target_language):
+    return [{"role": "user", "content": [{
+        "type": "text", "source_lang_code": source_language,
+        "target_lang_code": target_language, "text": source,
+    }]}]
+
+
+def gemma3_rope_compatibility(config):
+    """Express Gemma3's nested RoPE settings in its equivalent legacy format."""
+    text = config.get_text_config()
+    if getattr(text, "model_type", None) != "gemma3_text":
+        return config
+    parameters = getattr(text, "rope_parameters", None)
+    if not isinstance(parameters, dict) or "full_attention" not in parameters:
+        return config
+    if set(parameters) != {"full_attention", "sliding_attention"}:
+        raise ValueError("unsupported Gemma3 nested RoPE layout")
+    full, sliding = parameters["full_attention"], parameters["sliding_attention"]
+    if (not isinstance(full, dict) or "rope_type" not in full
+            or not isinstance(sliding, dict) or sliding.get("rope_type") != "default"
+            or set(sliding) - {"rope_type", "rope_theta"}):
+        raise ValueError("Gemma3 RoPE compatibility requires default sliding-attention RoPE")
+    full_theta = full.get("rope_theta", getattr(text, "rope_theta", None))
+    local_theta = sliding.get("rope_theta", getattr(text, "rope_local_base_freq", None))
+    if full_theta is None or local_theta is None:
+        raise ValueError("Gemma3 RoPE compatibility requires explicit full/local base frequencies")
+    # Transformers 4 + vLLM 0.18.1 inserts rope_theta at the top of a nested
+    # dictionary and then fails validation. Gemma3's legacy path uses the full
+    # parameters globally and default RoPE + rope_local_base_freq locally.
+    text.rope_parameters = deepcopy(full)
+    text.rope_parameters["rope_theta"] = full_theta
+    text.rope_theta = full_theta
+    text.rope_local_base_freq = local_theta
+    text.rope_scaling = deepcopy(text.rope_parameters)
+    print("Applied Gemma3 RoPE compatibility: "
+          f"full={text.rope_parameters}; sliding=default, theta={local_theta}", flush=True)
+    return config
+
+
+def generate_batch(llm, tokenizer, sampling, batch, args, start=0, prompt_builder=None, output_field="base"):
+    prompts = []
+    entries = []
+    positions = []
+    for offset, reference in enumerate(batch):
+        record = deepcopy(reference)
+        target = next(t for t in record["tgts"] if t["language"] == args.target_language)
+        target[output_field] = None
+        entries.append({"line": start + offset + 1, "record": record,
+                        "skip_reason": None})
+        if prompt_builder is None:
+            token_ids = tokenizer.apply_chat_template(
+                translation_messages(reference["seg"], args.source_language, args.target_language),
+                chat_template=args.prompt.read_text(encoding="utf-8"),
+                tokenize=True, add_generation_prompt=True)
+        else:
+            token_ids = prompt_builder(tokenizer, reference["seg"], args)
+        if len(token_ids) + args.max_new_tokens > args.max_model_len:
+            entries[offset]["skip_reason"] = "context_budget_exceeded"
+            continue
+        # Token IDs avoid re-tokenizing the rendered template and duplicating BOS.
+        prompts.append({"prompt_token_ids": token_ids})
+        positions.append(offset)
+    responses = llm.generate(prompts, sampling, use_tqdm=False) if prompts else []
+    if len(responses) != len(prompts):
+        raise ValueError("model returned an unexpected number of translations")
+    for offset, response in zip(positions, responses):
+        line = start + offset + 1
+        if len(response.outputs) != 1:
+            raise ValueError(f"input row {line}: expected one translation")
+        answer = response.outputs[0]
+        entries[offset].update(raw_response=answer.text, finish_reason=answer.finish_reason)
+        if answer.finish_reason != "stop":
+            entries[offset]["skip_reason"] = "generation_" + str(answer.finish_reason)
+            continue
+        if not isinstance(answer.text, str) or not answer.text.strip():
+            entries[offset]["skip_reason"] = "empty_translation"
+            continue
+        target = next(t for t in entries[offset]["record"]["tgts"] if t["language"] == args.target_language)
+        target[output_field] = answer.text.rstrip()
+    return entries
+
+
+def check_skip_policy_migration(previous, current):
+    allowed = {"max_new_tokens", "script_sha256", "failure_policy"}
+    if ({key: value for key, value in previous.items() if key not in allowed}
+            != {key: value for key, value in current.items() if key not in allowed}):
+        raise ValueError("resume configuration or input differs from checkpoint")
+    if ("failure_policy" in previous or current.get("failure_policy") != "skip"
+            or current["max_new_tokens"] != 512 or previous["max_new_tokens"] not in (512, 1024)):
+        raise ValueError("resume settings differ; only migration to the 512-token skip policy is supported")
+
+
+def run(args, references, prompt_builder=None, engine_overrides=None, driver_path=None, output_field="base"):
+    output = args.output.resolve()
+    reference_output = args.references_output.resolve() if args.references_output else None
+    audit = Path(str(output) + ".audit.jsonl")
+    manifest = Path(str(output) + ".manifest.json")
+    paths = tuple(path for path in (output, reference_output, audit, manifest) if path is not None)
+    if len(set(paths)) != len(paths) or args.input.resolve() in paths:
+        raise ValueError("input, outputs, and checkpoint paths must be distinct")
+    config = {"format_version": 4, "input_sha256": digest(args.input),
+              "script_sha256": digest(Path(__file__)), "model": args.model,
+              "revision": args.revision, "source_language": args.source_language,
+              "target_language": args.target_language, "skip_header": args.skip_header,
+              "limit": args.limit, "seed": args.seed, "temperature": 0,
+              "max_model_len": args.max_model_len, "max_new_tokens": args.max_new_tokens,
+              "tensor_parallel_size": args.tensor_parallel_size, "batch_size": args.batch_size,
+              "gpu_memory_utilization": args.gpu_memory_utilization,
+              "references_output": str(reference_output) if reference_output else None, "dtype": "bfloat16"}
+    config["prompt"] = args.prompt.read_text(encoding="utf-8")
+    config["failure_policy"] = "skip"
+    if driver_path is not None:
+        config["driver_sha256"] = digest(driver_path)
+        config["chat_format"] = "native_no_thinking"
+        config["engine_overrides"] = engine_overrides or {}
+        config["output_field"] = output_field
+    if not args.resume and any(path.exists() for path in paths):
+        raise ValueError("output/checkpoint exists; use --resume or a new --output")
+    if args.resume and not manifest.exists():
+        raise ValueError("--resume requires an existing manifest")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    if reference_output:
+        reference_output.parent.mkdir(parents=True, exist_ok=True)
+    with open(audit, "a+b") as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("another job is using this output checkpoint") from error
+        previous_config = None
+        if args.resume:
+            previous = json.loads(manifest.read_text(encoding="utf-8"))
+            if previous != config:
+                check_skip_policy_migration(previous, config)
+                previous_config = previous
+        else:
+            if (manifest.exists() or output.exists()
+                    or (reference_output and reference_output.exists()) or stream.tell()):
+                raise ValueError("output/checkpoint was created by another job")
+            atomic_json(manifest, config)
+        completed = read_checkpoint(stream)
+        if len(completed) > len(references):
+            raise ValueError("checkpoint contains more rows than input")
+        for index, entry in enumerate(completed):
+            record = entry["record"]
+            if (record["language"], record["seg"]) != (
+                    references[index]["language"], references[index]["seg"]):
+                raise ValueError("checkpoint source differs from input")
+            targets = record.get("tgts", [])
+            if output_field != "base":
+                matches = [t for t in targets if t.get("language") == args.target_language]
+                if len(matches) != 1:
+                    raise ValueError("invalid checkpoint target language")
+                translation = matches[0].get(output_field)
+                if not ((isinstance(translation, str) and translation.strip())
+                        or (translation is None and entry.get("skip_reason"))):
+                    raise ValueError("invalid checkpoint translation")
+                restored = deepcopy(record)
+                next(t for t in restored["tgts"] if t["language"] == args.target_language).pop(output_field, None)
+                if restored != references[index]:
+                    raise ValueError("checkpoint record differs from input")
+                continue
+            if (len(targets) != 1 or targets[0].get("language") != args.target_language
+                    or not ((isinstance(targets[0].get("base"), str) and targets[0]["base"].strip())
+                            or (targets[0].get("base") is None and entry.get("skip_reason")))):
+                raise ValueError("invalid checkpoint translation")
+            if targets[0].get("human") != references[index]["tgts"][0]["human"]:
+                raise ValueError("checkpoint human reference differs from input")
+        if previous_config is not None:
+            history = Path(str(output) + ".resume-history.jsonl")
+            with history.open("a", encoding="utf-8") as history_stream:
+                history_stream.write(json.dumps({"completed_rows": len(completed),
+                                                 "previous": previous_config, "next": config}) + "\n")
+                history_stream.flush()
+                os.fsync(history_stream.fileno())
+            atomic_json(manifest, config)
+            print(f"Preserving {len(completed)} completed rows; using 512 tokens and skipping failures. "
+                  f"Previous/current settings and script hashes recorded in {history}", flush=True)
+        if len(completed) < len(references):
+            from vllm import LLM, SamplingParams
+
+            llm = LLM(model=args.model, revision=args.revision, tokenizer_revision=args.revision,
+                      hf_overrides=gemma3_rope_compatibility,
+                      tensor_parallel_size=args.tensor_parallel_size,
+                      distributed_executor_backend="mp", dtype="bfloat16",
+                      max_model_len=args.max_model_len, max_num_seqs=args.batch_size,
+                      gpu_memory_utilization=args.gpu_memory_utilization, seed=args.seed,
+                      language_model_only=True, enable_prefix_caching=True,
+                      generation_config="vllm", **(engine_overrides or {}))
+            tokenizer = llm.get_tokenizer()
+            sampling = SamplingParams(temperature=0, max_tokens=args.max_new_tokens, seed=args.seed)
+            for start in range(len(completed), len(references), args.batch_size):
+                entries = generate_batch(llm, tokenizer, sampling,
+                                         references[start:start + args.batch_size], args, start,
+                                         prompt_builder=prompt_builder, output_field=output_field)
+                for entry in entries:
+                    stream.write((json.dumps(entry, ensure_ascii=False) + "\n").encode("utf-8"))
+                stream.flush()
+                os.fsync(stream.fileno())
+                completed.extend(entries)
+                print(f"Checkpointed {len(completed)}/{len(references)} translations", flush=True)
+        export_dataset(output, completed)
+        if reference_output:
+            export_dataset(reference_output, [{"record": reference} for reference in references])
+    print(f"Student translations with human references: {output}")
+    print(f"Skipped translations: {sum(bool(entry.get('skip_reason')) for entry in completed)}")
+    if reference_output:
+        print(f"Separate human references: {reference_output}")
+
+
+def parse_args(argv=None, defaults=None, description=None, prompt_help=None, input_help=None, require_gzip=True):
+    parser = argparse.ArgumentParser(description=description or __doc__)
+    parser.add_argument("--input", type=Path, required=True, help=input_help or "source<TAB>reference TSV, optionally .gz")
+    parser.add_argument("--output", type=Path, required=True, help="Translation JSONL output" + (", must end in .gz" if require_gzip else ", optionally .gz"))
+    parser.add_argument("--references-output", type=Path, help="optionally export a separate reference file")
+    parser.add_argument("--source-language", required=True, help="TranslateGemma language code, e.g. en")
+    parser.add_argument("--target-language", required=True, help="TranslateGemma language code, e.g. fr")
+    parser.add_argument("--model", default=DEFAULT_MODEL, help="HF model ID or local directory")
+    parser.add_argument("--prompt", type=Path, default=ROOT / "prompts/base_translation.txt",
+                        help=prompt_help or "editable Gemma chat template (Jinja)")
+    parser.add_argument("--revision", help="model/tokenizer revision for reproducibility")
+    parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--max-model-len", type=int, default=2048)
+    parser.add_argument("--max-new-tokens", type=int, default=512)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.90)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--limit", type=int, help="translate first N pairs; validate the entire TSV")
+    parser.add_argument("--skip-header", action="store_true", help="skip the first TSV line")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="validate TSV and show model input; no GPU needed")
+    parser.set_defaults(**(defaults or {}))
+    args = parser.parse_args(argv)
+    if args.source_language == args.target_language:
+        parser.error("source and target languages must differ")
+    if any(value <= 0 for value in (args.batch_size, args.tensor_parallel_size,
+                                    args.max_model_len, args.max_new_tokens)):
+        parser.error("batch, GPU, and token settings must be positive")
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit must be positive")
+    if args.max_new_tokens >= args.max_model_len or not 0 < args.gpu_memory_utilization < 1:
+        parser.error("invalid context budget or GPU memory utilization")
+    if require_gzip and not args.output.name.endswith(".gz"):
+        parser.error("--output must end in .gz")
+    if args.references_output and not args.references_output.name.endswith(".gz"):
+        parser.error("--references-output must end in .gz")
+    return args
+
+
+def main():
+    args = parse_args()
+    try:
+        references = load_tsv(args.input, args.source_language, args.target_language,
+                              args.limit, args.skip_header)
+        if not args.prompt.read_text(encoding="utf-8").strip():
+            raise ValueError("empty translation prompt")
+        if args.dry_run:
+            print(f"Validated {len(references)} selected sentence pairs")
+            print(f"Prompt template: {args.prompt}")
+            print(json.dumps(translation_messages(references[0]["seg"], args.source_language,
+                                                  args.target_language), ensure_ascii=False, indent=2))
+        else:
+            run(args, references)
+    except (ValueError, OSError, ImportError) as error:
+        raise SystemExit(f"Error: {error}") from error
+
+
+if __name__ == "__main__":
+    main()

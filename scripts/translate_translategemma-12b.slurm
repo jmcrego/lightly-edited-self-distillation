@@ -16,6 +16,18 @@
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?Submit from the repository root}"
 
+if [[ $# -eq 0 || -z "$1" ]]; then
+  echo "Usage: sbatch $0 FILE [translation options...]" >&2
+  exit 1
+fi
+FILE="$1"
+shift
+if [[ ! -f "$FILE" || ! -r "$FILE" ]]; then
+  echo "Input file does not exist or is not readable: $FILE" >&2
+  exit 1
+fi
+FOUT="${FILE%.gz}.translategemma12b.jsonl.gz"
+
 export LC_ALL=C
 export LANG=C
 export PYTHONUTF8=1
@@ -55,19 +67,20 @@ probe = torch.empty(1, device="cuda:0")
 print("GPU usable:", torch.cuda.get_device_name(0), flush=True)
 PY
 
-FILE=data/roche.random.10K.enfr.gz
-FOUT=data/roche.random.10K.transgemma12b.jsonl.gz
+# FILE=data/roche.random.10K.enfr.gz
+# FOUT=data/roche.random.10K.transgemma12b.jsonl.gz
 
-FILE=data/roche.random.50K.enfr.gz
-FOUT=data/roche.random.50K.transgemma12b.jsonl.gz
+# FILE=data/roche.random.50K.enfr.gz
+# FOUT=data/roche.random.50K.transgemma12b.jsonl.gz
 
-srun --gres=gpu:1 python -u scripts/translate_tsv.py \
-  --input $FILE \
+
+srun --gres=gpu:1 python -u scripts/translate_translategemma-12b.py \
+  --input "$FILE" \
   --source-language en \
   --target-language fr \
   --model "$MODEL" \
   --prompt prompts/base_translation.txt \
   --tensor-parallel-size 1 \
   --batch-size 32 \
-  --output $FOUT \
+  --output "$FOUT" \
   "$@"

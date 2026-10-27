@@ -1,6 +1,6 @@
 # Translate TSV pairs before post-editing
 
-`scripts/translate_tsv.py` reads UTF-8 `source<TAB>human_reference` pairs, one
+`scripts/translate_translategemma-12b.py` reads UTF-8 `source<TAB>human_reference` pairs, one
 pair per line. It accepts plain TSV or gzip-compressed TSV; use `--skip-header`
 if the file has a header. Fields are literal text, not CSV-quoted: quotes are
 preserved, and embedded tabs or multiline fields are not supported. Empty fields
@@ -18,7 +18,7 @@ Jean Zay directory `/lustre/fsmisc/dataset/HuggingFace_Models/google/translatege
 On a GPU node with the existing post-editing venv activated:
 
 ```bash
-python -u scripts/translate_tsv.py \
+python -u scripts/translate_translategemma-12b.py \
   --input data/domain.en-fr.tsv \
   --source-language en --target-language fr \
   --model /lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it \
@@ -34,7 +34,7 @@ or allocate GPUs; run it inside your GPU allocation.
 Validate the TSV and inspect the source-only payload without loading a model:
 
 ```bash
-python scripts/translate_tsv.py \
+python scripts/translate_translategemma-12b.py \
   --input data/domain.en-fr.tsv \
   --source-language en --target-language fr \
   --output data/domain.student.jsonl.gz --dry-run
@@ -115,17 +115,17 @@ Submit from the repository root:
 
 ```bash
 mkdir -p logs
-sbatch scripts/translate_tsv.slurm
+sbatch scripts/translate_translategemma-12b.slurm
 ```
 
 Arguments after the script override its Python defaults. Use separate paths
 for a pilot so its outputs do not conflict with the full run:
 
 ```bash
-sbatch scripts/translate_tsv.slurm --limit 100 \
+sbatch scripts/translate_translategemma-12b.slurm --limit 100 \
   --output data/roche.pilot.transgemma12b.jsonl.gz
 ```
 
-Resume a full run with `sbatch scripts/translate_tsv.slurm --resume`. Logs are
+Resume a full run with `sbatch scripts/translate_translategemma-12b.slurm --resume`. Logs are
 `logs/translate-JOBID.out` and `.err`. The initial time limit is four hours;
 adjust it based on pilot throughput and your allocation's limits.

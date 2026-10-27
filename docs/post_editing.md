@@ -5,7 +5,7 @@ It uses supported domain context, corrects actual errors, and preserves
 valid student wording. The reference is evidence, not a wording template.
 Unchanged translations remain in the training dataset.
 
-For files produced by `translate_tsv.py`, the human reference is stored in each
+For files produced by `translate_translategemma-12b.py`, the human reference is stored in each
 target's `human` field and read automatically when `--references` is
 omitted. A separate `--references` JSONL file is still supported and takes
 precedence. Supply the translation input explicitly with `--synthetic`.
