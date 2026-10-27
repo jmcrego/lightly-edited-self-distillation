@@ -31,6 +31,11 @@ See [post-editing instructions](docs/post_editing.md) for output examples,
 checkpointing, and pilot runs, and [training setup](docs/training_environment.md)
 for using the exported TSV.
 
+To inspect whether corrections stay close to the frozen TranslateGemma model,
+see [distribution inspection](docs/distribution_inspection.md). The scorer
+reports sentence-level edit distances and NLL for base/human/corrected
+translations, plus aggregate comparisons, using a one-GPU launcher.
+
 ## Training Environment
 
 See [Jean Zay training setup](docs/training_environment.md) for environment

@@ -263,3 +263,11 @@ Local checks:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## Inspecting edits and frozen-model likelihood
+
+After post-editing, use the [distribution inspection scorer](distribution_inspection.md)
+to compare base, human, and corrected translations under the original
+TranslateGemma checkpoint. It produces sentence-level JSONL/TSV reports and
+global edit-distance/NLL summaries. It does not change translations or training
+data, and likelihood alone is not a translation-quality measure.
