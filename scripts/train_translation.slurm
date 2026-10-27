@@ -1,7 +1,7 @@
 #!/bin/bash
 # Submit from the repository root after creating logs/.
 # Use a separate training environment with the dependencies in train_translation.py.
-# Override arguments by appending options to sbatch scripts/train_translation.slurm.
+# Usage: sbatch scripts/train_translation.slurm EXPERIMENT [training options...]
 #SBATCH --job-name=transgemma-lora
 #SBATCH --account=eut@h100
 #SBATCH --constraint=h100
@@ -16,6 +16,45 @@
 
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:?Submit from the repository root}"
+
+usage() {
+  echo "Usage: sbatch $0 sft-{corrected|human|base} [training options...]" >&2
+  echo "       sbatch $0 {cpo|dpo}-CHOSEN-REJECTED [training options...]" >&2
+  echo "CHOSEN and REJECTED: distinct names from corrected, human, base." >&2
+}
+target_column() {
+  case "$1" in
+    human) echo 2 ;;
+    base) echo 3 ;;
+    corrected) echo 4 ;;
+  esac
+}
+EXPERIMENT="${1:-}"
+if [[ "$EXPERIMENT" =~ ^sft-(corrected|human|base)$ ]]; then
+  METHOD="sft"
+  LEARNING_RATE=2e-5
+  TARGET_COLUMN="$(target_column "${BASH_REMATCH[1]}")"
+  COLS=(--src_col 1 --tgt_col "$TARGET_COLUMN")
+elif [[ "$EXPERIMENT" =~ ^(cpo|dpo)-(corrected|human|base)-(corrected|human|base)$ ]]; then
+  METHOD="${BASH_REMATCH[1]}"
+  CHOSEN="${BASH_REMATCH[2]}"
+  REJECTED="${BASH_REMATCH[3]}"
+  if [[ "$CHOSEN" == "$REJECTED" ]]; then
+    echo "Chosen and rejected targets must differ." >&2
+    usage
+    exit 1
+  fi
+  LEARNING_RATE=5e-6
+  COLS=(--src_col 1 --chosen_col "$(target_column "$CHOSEN")" --rejected_col "$(target_column "$REJECTED")")
+else
+  usage
+  exit 1
+fi
+shift
+OUTPUT="training/Roche-81k-${EXPERIMENT}-${SLURM_JOB_ID}"
+
+
+
 
 export LC_ALL=C
 export LANG=C
@@ -36,6 +75,7 @@ if declare -F conda >/dev/null; then
   done
   set -u
 fi
+
 printf 'Loading training modules\n'
 module purge
 module load arch/h100
@@ -57,42 +97,30 @@ export TRANSFORMERS_OFFLINE=1
 export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=8
 
-# Experiment settings. Input files must already use src/tgt[/reject], not tgts.
+# Train: four-column src/human/base/corrected TSV. Dev: two-column src/human TSV.
 MODEL=/lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it
 PROMPT=prompts/base_translation.txt
-TRAIN=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
-DEV=data/roche.test.enfr.gz
 
-# METHOD="sft"
-# OUTPUT="training/${METHOD}-corrected-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --tgt_col 4"
+# TRAIN=data/roche.50K.postedited122b.full.src-human-base-corrected.tsv
+# DEV=data/roche.test.enfr.gz
 
-# METHOD="sft"
-# OUTPUT="training/${METHOD}-human-${SLURM_JOB_ID}"
-# COLS="--src_col 1 --tgt_col 2"
+TRAIN=data/Roche-train.enfr.translategemma12b.postedited27b.full.src-human-base-corrected.tsv
+DEV=data/Roche-test.enfr.gz
 
-# # ### exp 3 (not working)
-# # # METHOD="dpo"
-# # # OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
-# # # COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
 
-# CPO uses the same preference columns as DPO.
-METHOD="cpo"
-OUTPUT="training/${METHOD}-corrected-base-${SLURM_JOB_ID}"
-COLS="--src_col 1 --chosen_col 4 --rejected_col 3"
-
-# Learning rate uses the script's method-specific default unless overridden.
+# Method-specific learning rate; trailing options can override defaults.
 srun --gres=gpu:1 python -u scripts/train_translation.py \
   --method "$METHOD" \
   --model "$MODEL" \
   --train "$TRAIN" \
-  $COLS \
+  "${COLS[@]}" \
   --dev "$DEV" \
   --prompt "$PROMPT" \
   --output "$OUTPUT" \
   --source-language en \
   --target-language fr \
   --epochs 1.0 \
+  --learning-rate "$LEARNING_RATE" \
   --micro-batch-size 1 \
   --gradient-accumulation-steps 16 \
   --max-length 2048 \

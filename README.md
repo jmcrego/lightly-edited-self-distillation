@@ -31,10 +31,37 @@ See [post-editing instructions](docs/post_editing.md) for output examples,
 checkpointing, and pilot runs, and [training setup](docs/training_environment.md)
 for using the exported TSV.
 
-To inspect whether corrections stay close to the frozen TranslateGemma model,
-see [distribution inspection](docs/distribution_inspection.md). The scorer
-reports sentence-level edit distances and NLL for base/human/corrected
-translations, plus aggregate comparisons, using a one-GPU launcher.
+## Inspecting edits and frozen-model likelihood
+
+Use `inspect_translation_distribution.py` to compare base, human, and
+post-edited translations under the original frozen TranslateGemma-12B-IT model.
+It computes pairwise character/word edit distances and teacher-forced NLL,
+without training or changing any translations. Scoring uses only the source
+and language codes as context, with the original translation prompt.
+
+Run a 100-sentence pilot on one H100 using the training environment:
+
+```bash
+mkdir -p logs
+sbatch scripts/inspect_translation_distribution.slurm \
+  data/Roche-test.enfr.translategemma12b.postedited27b.full.jsonl.gz \
+  --limit 100 --output-prefix data/Roche-test.27b.distribution-pilot
+```
+
+Outputs are `PREFIX.sentences.jsonl` and `PREFIX.sentences.tsv` for sentence-level
+inspection, plus `PREFIX.summary.json` for global scores. Reports include NLL,
+total log-probability, perplexity, edit distances, unchanged counts, and paired
+NLL differences. For a full run, omit `--limit` and use a new output prefix;
+existing reports are not overwritten.
+
+Small edit distances indicate limited wording changes. Lower NLL means a
+translation is more predictable under the frozen model; a positive
+`corrected_minus_base` NLL difference means the correction is more surprising.
+This is not a quality score or KL divergence: valid domain terminology may
+increase NLL. Use the summary's `complete_triplets` group to compare all three
+variants on the same records. Missing and overlong candidates are reported
+rather than silently truncated. See [distribution inspection](docs/distribution_inspection.md)
+for scoring conventions, a GPU-free dry run, and report details.
 
 ## Training Environment
 

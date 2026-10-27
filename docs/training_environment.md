@@ -62,7 +62,7 @@ automatically. To use a different environment:
 
 ```bash
 export TRAIN_VENV=/path/to/training-venv
-sbatch scripts/train_translation.slurm
+sbatch scripts/train_translation.slurm sft-corrected
 ```
 
 ## Job Verification
@@ -71,7 +71,7 @@ Submit from the repository root after updating the launcher input paths:
 
 ```bash
 mkdir -p logs
-LC_ALL=C LANG=C sbatch scripts/train_translation.slurm
+LC_ALL=C LANG=C sbatch scripts/train_translation.slurm sft-corrected
 ```
 
 Before training, the launcher checks dependency imports, prints PyTorch,
@@ -121,3 +121,47 @@ prompt tokens in both losses, and uses no reference policy or reference-score
 precomputation. `--cpo-beta` scales the preference logits; `--cpo-alpha` weights
 the chosen-response NLL (zero disables it). The default learning rate is 5e-6,
 as for DPO. Greedy BLEU/chrF evaluation and best-adapter selection are unchanged.
+
+### Selecting the SFT target
+
+The first launcher argument selects the experiment; it is consumed before
+remaining options are forwarded to Python:
+
+```bash
+sbatch scripts/train_translation.slurm sft-corrected
+sbatch scripts/train_translation.slurm sft-human
+sbatch scripts/train_translation.slurm sft-base
+```
+
+All three use source column 1 and target columns 4, 2, and 3 respectively,
+with the same training settings. Outputs are saved under
+`training/Roche-81k-EXPERIMENT-JOBID`. Missing or invalid experiment names
+produce a usage error. Additional options follow the experiment name, e.g.
+`sbatch scripts/train_translation.slurm sft-corrected --learning-rate 5e-5`.
+
+### Selecting preference targets for CPO/DPO
+
+Use `METHOD-CHOSEN-REJECTED` as the first argument. The chosen target comes
+first and the rejected target second:
+
+```bash
+sbatch scripts/train_translation.slurm cpo-corrected-human
+sbatch scripts/train_translation.slurm cpo-corrected-base
+sbatch scripts/train_translation.slurm dpo-human-base
+```
+
+Both CPO and DPO accept all six ordered pairings of distinct targets from
+`corrected`, `human`, and `base`. These map to columns 4, 2, and 3 respectively.
+For example, `cpo-corrected-human` uses chosen column 4 and rejected column 2.
+SFT shortcuts remain `sft-corrected`, `sft-human`, and `sft-base`.
+
+Source defaults to column 1; override with a trailing `--src_col` if required.
+Output directories retain the experiment name, e.g.
+`training/Roche-81k-cpo-corrected-human-JOBID`. The launcher uses learning rate
+`2e-5` for SFT and `5e-6` for CPO/DPO. Additional Python options follow the
+experiment name:
+
+```bash
+sbatch scripts/train_translation.slurm cpo-corrected-human --cpo-beta 0.1 --cpo-alpha 1.0
+sbatch scripts/train_translation.slurm dpo-corrected-base --learning-rate 2e-6
+```
