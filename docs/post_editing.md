@@ -144,7 +144,8 @@ From the repository root, validate all source/language alignment and print one
 prompt without importing vLLM or loading a model:
 
 ```bash
-python3 scripts/post_edit_translations.py --dry-run
+python3 scripts/post_edit_translations.py \
+  --synthetic data/domain.student.jsonl.gz --dry-run
 ```
 
 Run a 100-sentence pilot with the 122B-A10B-FP8 model on four H100 80 GB GPUs.
@@ -159,8 +160,8 @@ its log files before executing the script. This directory is ignored by Git.
 
 ```bash
 mkdir -p logs
-sbatch --account=eut@h100 scripts/post_edit_translations.slurm \
-  --limit 100 --output data/postedited.pilot.jsonl.gz
+sbatch --account=eut@h100 scripts/post_edit_translations_4GPU.slurm \
+  data/domain.pilot.student.jsonl.gz --limit 100
 ```
 
 Review pilot edits for correctness and unnecessary rewriting. Then run the
@@ -168,25 +169,54 @@ complete corpus into a different output:
 
 ```bash
 mkdir -p logs
-sbatch --account=eut@h100 scripts/post_edit_translations.slurm
+sbatch --account=eut@h100 scripts/post_edit_translations_4GPU.slurm \
+  data/domain.student.jsonl.gz
 ```
 
 Resume an interrupted full run with the same inputs, prompt, model, and options:
 
 ```bash
 mkdir -p logs
-sbatch --account=eut@h100 scripts/post_edit_translations.slurm --resume
+sbatch --account=eut@h100 scripts/post_edit_translations_4GPU.slurm \
+  data/domain.student.jsonl.gz --resume
 ```
 
-Use `--no-reference` for a source/student-only ablation. The default input names
-match the existing paired files. `--synthetic`, `--references`, `--prompt`, and
-`--output` accept alternative paths. `--limit` restricts inference but still
-checks alignment throughout both files.
+For Qwen3.5-27B-FP8 on one H100, use the same input with the other launcher:
+
+```bash
+sbatch scripts/post_edit_translations_1GPU.slurm data/domain.student.jsonl.gz
+```
+
+Both launchers call `post_edit_translations.py`. The first argument is a readable
+input JSONL file, optionally gzipped. Removing `.gz` and `.jsonl`/`.json` gives
+the output prefix. The launchers append `.postedited27b.full` or
+`.postedited122b.full`, then `.jsonl.gz` for the post-edited dataset and
+`.src-human-base-corrected.tsv` for the four-column training export.
+
+For example, input `data/Roche-train.enfr.translategemma12b.jsonl.gz` produces:
+
+| Launcher | JSONL output | Four-column TSV output |
+| --- | --- | --- |
+| `_1GPU` | `data/Roche-train.enfr.translategemma12b.postedited27b.full.jsonl.gz` | `data/Roche-train.enfr.translategemma12b.postedited27b.full.src-human-base-corrected.tsv` |
+| `_4GPU` | `data/Roche-train.enfr.translategemma12b.postedited122b.full.jsonl.gz` | `data/Roche-train.enfr.translategemma12b.postedited122b.full.src-human-base-corrected.tsv` |
+
+The TSV conversion runs automatically after post-editing. It exports source,
+human reference, base translation, and corrected translation, in that order,
+and excludes rows where any of these values is null or empty. Set `TRAIN` in
+`train_translation.slurm` to the desired model's TSV. Both launchers use the
+same Python code and prompt; model, GPU allocation, tensor parallelism, output
+suffixes, and log names differ. The offline environment requires the selected
+model checkpoint to be present at the launcher's configured local path.
+
+Use `--no-reference` for a source/student-only ablation. Additional Python
+options such as `--references`, `--prompt`, `--limit`, and `--resume` follow the
+input path. Keep the derived `--output` path so the TSV export reads the same
+file. `--limit` restricts inference but still checks alignment throughout the input.
 
 ## Outputs and Validation
 
-- `logs/postedit-<JOB_ID>.out`: Slurm stdout, progress, and summary.
-- `logs/postedit-<JOB_ID>.err`: Slurm stderr, warnings, and errors.
+- `logs/postedit-27b-<JOB_ID>.out` / `logs/postedit-122b-<JOB_ID>.out`: Slurm stdout, progress, and summary.
+- `logs/postedit-27b-<JOB_ID>.err` / `logs/postedit-122b-<JOB_ID>.err`: Slurm stderr, warnings, and errors.
 - `data/postedited.10_data.jsonl.gz`: source text in `seg`, with target text in
   `base`, `human` (when available), and `corrected`. The original
   base text is retained; use `corrected` as the SFT target. Legacy target
@@ -233,25 +263,3 @@ Local checks:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
-
-## Post-edit named translations in one JSONL file
-
-For records with separate same-language targets containing `seg` (human
-reference), `translategemma-12b` (student), and optionally `qwen3.5-122b`, run:
-
-```bash
-python3 scripts/post_edit_json_qwen3.5-122B.py \
-  --input data/translations.jsonl --output data/translations.postedited.jsonl \
-  --dry-run
-```
-
-Remove `--dry-run` to run Qwen3.5-122B-A10B-FP8 with the existing vLLM
-post-editing environment on four GPUs. Use `--model` for a local checkpoint.
-The default prompt is `prompts/minimal_post_edit.txt`. Source and target
-languages are read from each record. Each student requires exactly one
-same-language `seg` reference; existing Qwen translations are not sent to the
-model. All original fields and target order are preserved, and
-`translategemma-12b+qwen3.5-122b` is added to the student target object.
-Both input and output support `.gz`. The shared inference options, audit,
-context-overflow handling, and `--resume` behavior described above apply;
-unavailable corrections are written as null. Resume uses the original input.

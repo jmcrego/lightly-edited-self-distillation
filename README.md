@@ -1,5 +1,36 @@
 # Lightly Edited Self-Distillation
 
+## Translation and post-editing
+
+Generate base translations with [TranslateGemma 12B](docs/translation.md), then
+post-edit them with either Qwen launcher below. Both launchers use the same
+`scripts/post_edit_translations.py`, prompt, and input/output format.
+
+| Launcher | Post-editing model | H100 GPUs | Tensor parallelism |
+| --- | --- | --- | --- |
+| `post_edit_translations_1GPU.slurm` | Qwen3.5-27B-FP8 | 1 | 1 |
+| `post_edit_translations_4GPU.slurm` | Qwen3.5-122B-A10B-FP8 | 4 | 4 |
+
+Submit from the repository root, passing the input JSONL file first:
+
+```bash
+mkdir -p logs
+sbatch scripts/post_edit_translations_1GPU.slurm data/Roche-train.enfr.translategemma12b.jsonl.gz
+# Or use the larger post-editor:
+sbatch scripts/post_edit_translations_4GPU.slurm data/Roche-train.enfr.translategemma12b.jsonl.gz
+```
+
+Each prompt includes the source, base translation, and human target reference
+(unless `--no-reference` is passed). Outputs stay alongside the input, with
+`.jsonl.gz` replaced by `.postedited27b.full.jsonl.gz` or
+`.postedited122b.full.jsonl.gz`. Each job also exports a matching
+`.src-human-base-corrected.tsv` for training, so no manual conversion is needed.
+Additional options follow the input path, for example `--resume`.
+
+See [post-editing instructions](docs/post_editing.md) for output examples,
+checkpointing, and pilot runs, and [training setup](docs/training_environment.md)
+for using the exported TSV.
+
 ## Training Environment
 
 See [Jean Zay training setup](docs/training_environment.md) for environment

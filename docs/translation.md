@@ -78,13 +78,19 @@ rows remain unchanged; input, model, prompt, context limit, and other settings
 must match. Old/new configurations, script hashes, and the checkpoint boundary
 are recorded in `OUTPUT.resume-history.jsonl`. Subsequent resumes remain strict.
 
-Feed the self-contained file to the correction job:
+Feed the self-contained file to the correction job. Choose Qwen3.5-27B-FP8
+on one GPU or Qwen3.5-122B-A10B-FP8 on four GPUs:
 
 ```bash
-sbatch scripts/post_edit_translations.slurm \
-  --synthetic data/domain.student.jsonl.gz \
-  --output data/domain.corrected.jsonl.gz
+sbatch scripts/post_edit_translations_1GPU.slurm data/domain.student.jsonl.gz
+# Or:
+sbatch scripts/post_edit_translations_4GPU.slurm data/domain.student.jsonl.gz
 ```
+
+Both launchers use `post_edit_translations.py` and automatically export the
+post-edited JSONL and a four-column source/human/base/corrected TSV. Output
+names retain the input prefix and identify the teacher as `postedited27b` or
+`postedited122b`. See [post-editing instructions](post_editing.md) for details.
 
 TranslateGemma input contract:
 https://huggingface.co/google/translategemma-12b-it#usage

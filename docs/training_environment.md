@@ -109,7 +109,13 @@ python scripts/train_translation.py --method cpo \
 ```
 
 Training TSV columns are source/human/base/corrected; dev columns are
-source/human. Identical preference pairs and oversized examples are excluded.
+source/human. The [post-editing launchers](post_editing.md) automatically create
+this four-column TSV after running either the 27B (one GPU) or 122B (four GPUs)
+post-editor. Set `TRAIN` in `scripts/train_translation.slurm` to the resulting
+`*.postedited27b.full.src-human-base-corrected.tsv` or
+`*.postedited122b.full.src-human-base-corrected.tsv` path. For SFT on corrections,
+select `--method sft --src_col 1 --tgt_col 4`; for CPO/DPO, prefer column 4 over
+column 3 as shown above. Identical preference pairs and oversized examples are excluded.
 CPO preserves the template's prompt tokens and Gemma end-of-turn token, masks
 prompt tokens in both losses, and uses no reference policy or reference-score
 precomputation. `--cpo-beta` scales the preference logits; `--cpo-alpha` weights
