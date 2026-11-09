@@ -11,7 +11,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=24
 #SBATCH --hint=nomultithread
-#SBATCH --time=08:00:00
+#SBATCH --time=01:00:00
 #SBATCH --output=logs/test-translation-%j.out
 #SBATCH --error=logs/test-translation-%j.err
 
