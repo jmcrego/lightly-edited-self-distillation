@@ -46,6 +46,14 @@ class TranslationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reference count"):
             prepare_input(self.args, Tokenizer(), "template")
 
+    def test_english_source_file(self):
+        self.args.input = self.directory / "test17.en"
+        self.args.input.write_text("Hi\nBye\n")
+        rows, excluded, has_refs = prepare_input(self.args, Tokenizer(), "template")
+        self.assertEqual([row["src"] for row in rows], ["Hi", "Bye"])
+        self.assertEqual(excluded, [])
+        self.assertFalse(has_refs)
+
     def test_gzipped_jsonl_and_partial_reference_rejection(self):
         self.args.input = self.directory / "input.jsonl.gz"
         with gzip.open(self.args.input, "wt") as stream:

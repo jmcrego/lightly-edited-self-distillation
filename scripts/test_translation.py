@@ -2,7 +2,7 @@
 """Greedy TranslateGemma translation, optionally with a LoRA adapter.
 
 Input: JSON/JSONL with src and optional tgt, TSV with src[<TAB>tgt], or
-plain .txt sources. All formats support .gz. Alternatively provide human
+plain .txt or .en sources. All formats support .gz. Alternatively provide human
 references as a separate plain-text file, one per original input record.
 With references, compute BLEU, chrF, and COMET (unless --no-comet).
 Use the training venv; see README.md for COMET compatibility pins.
@@ -27,8 +27,8 @@ def read_input(path):
     suffix = path.with_suffix("").suffix if path.suffix == ".gz" else path.suffix
     if suffix in {".json", ".jsonl"}:
         return list(read_examples(path, ["src", "tgt"]))
-    if suffix not in {".txt", ".tsv"}:
-        raise ValueError("input must be .json, .jsonl, .tsv, or .txt, optionally .gz")
+    if suffix not in {".txt", ".en", ".tsv"}:
+        raise ValueError("input must be .json, .jsonl, .tsv, .txt, or .en, optionally .gz")
     rows = []
     with open_text(path) as stream:
         for line, text in enumerate(stream, 1):
