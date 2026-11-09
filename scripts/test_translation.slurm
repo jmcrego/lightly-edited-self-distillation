@@ -26,8 +26,8 @@ CHECKPOINTS=(
 )
 [[ -r "$INPUT" ]] || { echo "Input not readable: $INPUT" >&2; exit 1; }
 for checkpoint in "${CHECKPOINTS[@]}"; do
-  [[ -d "training/$checkpoint/final-adapter" ]] || {
-    echo "Adapter missing: training/$checkpoint/final-adapter" >&2
+  [[ -d "../training/$checkpoint/final-adapter" ]] || {
+    echo "Adapter missing: ../training/$checkpoint/final-adapter" >&2
     exit 1
   }
 done
