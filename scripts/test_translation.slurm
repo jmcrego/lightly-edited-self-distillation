@@ -75,7 +75,7 @@ for checkpoint in "${CHECKPOINTS[@]}"; do
   srun --gres=gpu:1 python -u scripts/test_translation.py \
     --input "$INPUT" \
     --model /lustre/fsmisc/dataset/HuggingFace_Models/google/translategemma-12b-it \
-    --adapter "training/$checkpoint/final-adapter" \
+    --adapter "../training/$checkpoint/final-adapter" \
     --prompt prompts/base_translation.txt \
     --output "$OUTPUT" \
     --source-language en \
